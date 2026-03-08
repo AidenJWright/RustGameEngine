@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo build)",
+      "Bash(export PATH=\"$PATH:/c/Users/Home/.cargo/bin\")",
+      "Bash(export PATH=\"$PATH:/c/Users/Home/.cargo/bin:/usr/bin:/bin\")"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\Home\\.claude\\projects\\c--dev-RustGameEngine"
+    ]
+  }
+}

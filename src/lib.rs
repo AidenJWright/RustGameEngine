@@ -14,7 +14,7 @@
 //! - [`math`] — Vec2, Vec3, Mat4, Transform
 //! - [`components`] — game-domain plain-data components
 //! - [`systems`] — pure functional systems
-//! - [`platform`] — windowing abstraction (winit backend on Windows)
+//! - [`platform`] — cross-platform windowing/input layer (single `winit` backend)
 //! - [`renderer`] — wgpu render context, pipelines, draw queue, imgui layer
 
 #![warn(clippy::all, clippy::pedantic)]

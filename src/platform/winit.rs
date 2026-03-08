@@ -1,11 +1,8 @@
-//! Windows platform implementation using `winit 0.30`.
+//! Cross-platform `winit` backend for window creation and event translation.
 //!
-//! Maps all `winit::event::Event` variants to engine-native `PlatformEvent`.
-//! Every mapping is commented so a second implementor can follow the same pattern.
+//! Maps `winit::event::Event` variants to engine-native `PlatformEvent`.
+//! A second backend is intentionally not abstracted for now.
 
-use raw_window_handle::{
-    DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle,
-};
 use winit::{
     event::{ElementState, MouseButton as WinitMouseButton, WindowEvent},
     event_loop::EventLoop,
@@ -13,14 +10,84 @@ use winit::{
     window::{Window, WindowAttributes},
 };
 
-use super::traits::{KeyCode, MouseButton, Platform, PlatformError, PlatformEvent};
+/// Error type for platform creation.
+#[derive(Debug)]
+pub enum PlatformError {
+    /// The OS refused to create a window.
+    WindowCreation(String),
+    /// Event loop could not be initialised.
+    EventLoop(String),
+}
+
+impl std::fmt::Display for PlatformError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::WindowCreation(s) => write!(f, "window creation failed: {s}"),
+            Self::EventLoop(s) => write!(f, "event loop error: {s}"),
+        }
+    }
+}
+
+impl std::error::Error for PlatformError {}
+
+// ---------------------------------------------------------------------------
+// Engine-native input types
+// ---------------------------------------------------------------------------
+
+/// Engine-native key code — maps from winit-provided key input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyCode {
+    Escape,
+    Space,
+    Return,
+    Left,
+    Right,
+    Up,
+    Down,
+    /// Any key not explicitly listed above.
+    Other(u32),
+}
+
+/// Mouse button identifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseButton {
+    Left,
+    Right,
+    Middle,
+    Other(u16),
+}
+
+// ---------------------------------------------------------------------------
+// Platform events
+// ---------------------------------------------------------------------------
+
+/// Engine-native event emitted by `map_window_event`.
+#[derive(Debug, Clone)]
+pub enum PlatformEvent {
+    /// The user requested the application to close.
+    Quit,
+    /// The window was resized to the given physical pixel dimensions.
+    Resized(u32, u32),
+    /// The OS requested a redraw.
+    RedrawRequested,
+    /// A keyboard key was pressed.
+    KeyPressed(KeyCode),
+    /// A keyboard key was released.
+    KeyReleased(KeyCode),
+    /// The cursor moved to the given position in logical pixels.
+    MouseMoved { x: f64, y: f64 },
+    /// A mouse button state changed.
+    MouseButton { button: MouseButton, pressed: bool },
+}
+
+// ---------------------------------------------------------------------------
+// Winit platform
+// ---------------------------------------------------------------------------
 
 /// `winit 0.30`-backed platform — owns the `EventLoop` and `Window`.
 pub struct WinitPlatform {
     /// The actual OS window.
     pub window: Window,
-    /// Buffered events collected during the last `poll_events` call.
-    buffered_events: Vec<PlatformEvent>,
     /// The event loop, held here until the caller takes it for `run`.
     event_loop: Option<EventLoop<()>>,
 }
@@ -37,72 +104,48 @@ impl WinitPlatform {
     pub fn take_event_loop(&mut self) -> Option<EventLoop<()>> {
         self.event_loop.take()
     }
-}
 
-impl Platform for WinitPlatform {
-    fn create_window(title: &str, width: u32, height: u32) -> Result<Self, PlatformError> {
-        // In winit 0.30, EventLoop::new() returns a Result.
+    /// Create the window and return a ready-to-use platform instance.
+    pub fn create_window(title: &str, width: u32, height: u32) -> Result<Self, PlatformError> {
+        // In winit 0.30, `EventLoop::new()` returns a `Result`.
         let event_loop = EventLoop::new()
             .map_err(|e| PlatformError::EventLoop(e.to_string()))?;
 
-        // In winit 0.30, windows are created via the ActiveEventLoop inside the
-        // event loop callback. For pre-loop creation we use create_window directly
-        // on the event_loop using the OwnedDisplayHandle approach.
         let attrs = WindowAttributes::default()
             .with_title(title)
             .with_inner_size(winit::dpi::PhysicalSize::new(width, height))
             .with_resizable(true);
 
-        // SAFETY: creating before loop.run is safe on Windows/macOS/Linux.
-        #[allow(deprecated)]
+        // In winit 0.30, windows are typically created via the event-loop callback.
+        // On current stable releases this direct creation path is safe across
+        // Windows, macOS, and Linux.
         let window = event_loop
             .create_window(attrs)
             .map_err(|e| PlatformError::WindowCreation(e.to_string()))?;
 
         Ok(Self {
             window,
-            buffered_events: Vec::new(),
             event_loop: Some(event_loop),
         })
     }
 
-    fn poll_events(&mut self) -> Vec<PlatformEvent> {
-        std::mem::take(&mut self.buffered_events)
-    }
-
-    fn inner_size(&self) -> (u32, u32) {
+    /// Current inner (drawable) size in physical pixels.
+    pub fn inner_size(&self) -> (u32, u32) {
         let s = self.window.inner_size();
         (s.width, s.height)
     }
 
-    fn request_redraw(&self) {
+    /// Ask the OS to redraw as soon as possible.
+    pub fn request_redraw(&self) {
         self.window.request_redraw();
     }
 }
 
 // ---------------------------------------------------------------------------
-// raw-window-handle 0.6 integration (required by wgpu 25 surface creation)
+// Event mapping helpers
 // ---------------------------------------------------------------------------
 
-impl HasWindowHandle for WinitPlatform {
-    fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
-        self.window.window_handle()
-    }
-}
-
-impl HasDisplayHandle for WinitPlatform {
-    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
-        self.window.display_handle()
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Event mapping helpers (used by demo's event loop)
-// ---------------------------------------------------------------------------
-
-/// Convert a `winit 0.30` `PhysicalKey` to engine `KeyCode`.
-///
-/// A second platform maps its own key enum here using the same pattern.
+/// Convert a `winit::event::PhysicalKey` to engine `KeyCode`.
 pub fn map_physical_key(key: PhysicalKey) -> KeyCode {
     match key {
         PhysicalKey::Code(WinitKeyCode::Escape) => KeyCode::Escape,
@@ -117,10 +160,9 @@ pub fn map_physical_key(key: PhysicalKey) -> KeyCode {
     }
 }
 
-/// Convert a `winit 0.30` `MouseButton` to engine `MouseButton`.
+/// Convert a `winit::event::MouseButton` to engine `MouseButton`.
 pub fn map_mouse_button(b: WinitMouseButton) -> MouseButton {
     match b {
-        // Left / right / middle are the three standard buttons.
         WinitMouseButton::Left => MouseButton::Left,
         WinitMouseButton::Right => MouseButton::Right,
         WinitMouseButton::Middle => MouseButton::Middle,
@@ -131,9 +173,9 @@ pub fn map_mouse_button(b: WinitMouseButton) -> MouseButton {
     }
 }
 
-/// Convert a `winit 0.30` `WindowEvent` to zero or one `PlatformEvent`.
+/// Convert a `winit::event::WindowEvent` to zero or one `PlatformEvent`.
 ///
-/// Returns `None` for events the engine doesn't care about (e.g. focus changes).
+/// Returns `None` for events the engine doesn't care about (for example focus changes).
 pub fn map_window_event(event: &WindowEvent) -> Option<PlatformEvent> {
     match event {
         // Window close button or Alt-F4.

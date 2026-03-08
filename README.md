@@ -57,16 +57,6 @@ The **"Entity Colors"** imgui window (top-left) lets you:
 
 ---
 
-## How to add a new platform
-
-1. Create `src/platform/<name>.rs` with a struct (e.g. `Sdl2Platform`).
-2. Implement the `Platform` trait — map your OS events to `PlatformEvent` variants
-   using the same pattern shown in `platform/windows.rs` (every mapping is commented).
-3. Add `#[cfg(feature = "platform-<name>")]` gating in `platform/mod.rs` and add
-   the feature to `Cargo.toml`. Set `ActivePlatform = <Name>Platform` under that feature.
-
----
-
 ## How to add a new Component
 
 1. Create a plain `struct` or `enum` in `src/components/<name>.rs` deriving

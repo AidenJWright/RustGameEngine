@@ -433,7 +433,6 @@ dependencies = [
  "imgui-wgpu",
  "imgui-winit-support",
  "pollster",
- "raw-window-handle",
  "wgpu",
  "winit",
 ]

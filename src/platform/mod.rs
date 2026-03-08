@@ -1,15 +1,11 @@
-//! Platform abstraction — windowing and OS events.
+//! Cross-platform platform layer for windowing and input.
 //!
-//! The engine only depends on `Platform` + `PlatformEvent`. Backend modules
-//! are feature-gated so only the selected platform is compiled.
+//! The engine currently uses a single `winit` backend that works on
+//! Windows, macOS, and Linux.
 
-pub mod traits;
+pub mod winit;
 
-#[cfg(feature = "platform-windows")]
-pub mod windows;
-
-pub use traits::{KeyCode, MouseButton, Platform, PlatformError, PlatformEvent};
-
-/// The concrete platform type selected at compile time.
-#[cfg(feature = "platform-windows")]
-pub type ActivePlatform = windows::WinitPlatform;
+pub use winit::{
+    map_mouse_button, map_physical_key, map_window_event, KeyCode, MouseButton, PlatformError,
+    PlatformEvent, WinitPlatform,
+};

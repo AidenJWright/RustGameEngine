@@ -1,9 +1,10 @@
 //! 3-component float vector.
 
 use std::ops::{Add, Mul, Neg, Sub};
+use serde::{Deserialize, Serialize};
 
 /// A 3D vector with `f32` components.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct Vec3 {
     pub x: f32,
     pub y: f32,

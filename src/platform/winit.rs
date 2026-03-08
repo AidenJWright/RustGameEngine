@@ -1,13 +1,13 @@
 //! Cross-platform `winit` backend for window creation and event translation.
 //!
-//! Maps `winit::event::Event` variants to engine-native `PlatformEvent`.
-//! A second backend is intentionally not abstracted for now.
+//! Maps `winit::event::WindowEvent` variants to engine-native `PlatformEvent`.
+//! Window creation is handled externally via `ActiveEventLoop::create_window`;
+//! this module simply wraps the resulting `Window`.
 
 use winit::{
     event::{ElementState, MouseButton as WinitMouseButton, WindowEvent},
-    event_loop::EventLoop,
     keyboard::{KeyCode as WinitKeyCode, PhysicalKey},
-    window::{Window, WindowAttributes},
+    window::Window,
 };
 
 /// Error type for platform creation.
@@ -84,49 +84,27 @@ pub enum PlatformEvent {
 // Winit platform
 // ---------------------------------------------------------------------------
 
-/// `winit 0.30`-backed platform — owns the `EventLoop` and `Window`.
+/// `winit 0.30`-backed platform — wraps an OS `Window`.
+///
+/// Window creation is delegated to `ActiveEventLoop::create_window` inside
+/// an `ApplicationHandler::resumed` implementation; pass the resulting
+/// `Window` to [`WinitPlatform::from_window`].
 pub struct WinitPlatform {
     /// The actual OS window.
     pub window: Window,
-    /// The event loop, held here until the caller takes it for `run`.
-    event_loop: Option<EventLoop<()>>,
 }
 
 impl WinitPlatform {
+    /// Wrap an already-created `Window`.
+    pub fn from_window(window: Window) -> Self {
+        Self { window }
+    }
+
     /// Direct access to the underlying `winit::window::Window`.
     ///
     /// Needed by `imgui-winit-support` which takes a `&winit::window::Window`.
     pub fn window(&self) -> &Window {
         &self.window
-    }
-
-    /// Take ownership of the `EventLoop` (can only be called once).
-    pub fn take_event_loop(&mut self) -> Option<EventLoop<()>> {
-        self.event_loop.take()
-    }
-
-    /// Create the window and return a ready-to-use platform instance.
-    pub fn create_window(title: &str, width: u32, height: u32) -> Result<Self, PlatformError> {
-        // In winit 0.30, `EventLoop::new()` returns a `Result`.
-        let event_loop = EventLoop::new()
-            .map_err(|e| PlatformError::EventLoop(e.to_string()))?;
-
-        let attrs = WindowAttributes::default()
-            .with_title(title)
-            .with_inner_size(winit::dpi::PhysicalSize::new(width, height))
-            .with_resizable(true);
-
-        // In winit 0.30, windows are typically created via the event-loop callback.
-        // On current stable releases this direct creation path is safe across
-        // Windows, macOS, and Linux.
-        let window = event_loop
-            .create_window(attrs)
-            .map_err(|e| PlatformError::WindowCreation(e.to_string()))?;
-
-        Ok(Self {
-            window,
-            event_loop: Some(event_loop),
-        })
     }
 
     /// Current inner (drawable) size in physical pixels.

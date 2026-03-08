@@ -1,9 +1,25 @@
-//! Tag component — a static string label.
+//! Tag component — a string label for an entity.
 
+use serde::{Deserialize, Serialize};
 use crate::ecs::component::Component;
 
 /// A human-readable label for an entity (e.g. `"player"`, `"scene_root"`).
-#[derive(Debug, Clone)]
-pub struct Tag(pub &'static str);
+///
+/// Uses `String` so that editor-created tags and deserialized scenes work
+/// without requiring `'static` string literals.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Tag(pub String);
+
+impl Tag {
+    /// Convenience constructor from any string-like value.
+    pub fn new(s: impl Into<String>) -> Self {
+        Self(s.into())
+    }
+
+    /// View the tag as a `&str`.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 impl Component for Tag {}

@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 
 /// Maximum players that can be in a lobby.
 pub const MAX_PLAYERS: usize = 4;
-/// Minimum players required to auto-start a match.
-pub const MIN_PLAYERS: usize = 2;
+/// Minimum players required to start a match (server policy may require more).
+pub const MIN_PLAYERS: usize = 1;
 
 /// Messages sent by clients to the matchmaker.
 #[derive(Debug, Serialize, Deserialize, Clone)]

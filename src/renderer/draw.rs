@@ -116,9 +116,26 @@ impl DrawQueue {
                     resolution: [width, height],
                     _pad: [0.0; 2],
                 };
-                circle_pipeline.upload_uniforms(&context.queue, &uniforms);
+                let uniform_buffer = context.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("circle draw uniform"),
+                    size: std::mem::size_of::<Uniforms>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                context.queue.write_buffer(&uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+                let bind_group = context.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("circle draw bind group"),
+                    layout: &circle_pipeline.bind_group_layout,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: uniform_buffer.as_entire_binding(),
+                    }],
+                });
+
+                // Use a per-command bind group/buffer so each draw sees its own
+                // transform/size/color pair, avoiding last-write overwrite.
                 pass.set_pipeline(&circle_pipeline.pipeline);
-                pass.set_bind_group(0, &circle_pipeline.bind_group, &[]);
+                pass.set_bind_group(0, &bind_group, &[]);
                 pass.draw(0..4, 0..1);
             });
 
@@ -140,9 +157,23 @@ impl DrawQueue {
                     resolution: [width, height],
                     _pad: [0.0; 2],
                 };
-                rect_pipeline.upload_uniforms(&context.queue, &uniforms);
+                let uniform_buffer = context.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("rect draw uniform"),
+                    size: std::mem::size_of::<Uniforms>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                context.queue.write_buffer(&uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+                let bind_group = context.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("rect draw bind group"),
+                    layout: &rect_pipeline.bind_group_layout,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: uniform_buffer.as_entire_binding(),
+                    }],
+                });
                 pass.set_pipeline(&rect_pipeline.pipeline);
-                pass.set_bind_group(0, &rect_pipeline.bind_group, &[]);
+                pass.set_bind_group(0, &bind_group, &[]);
                 pass.draw(0..4, 0..1);
             });
 

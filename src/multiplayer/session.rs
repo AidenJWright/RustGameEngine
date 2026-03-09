@@ -81,17 +81,13 @@ impl MatchSession {
                 io::Error::new(io::ErrorKind::NotFound, "host peer id not in player list")
             })?;
 
-        let socket = if role == MatchRole::Host {
-            UdpSocket::bind(local_addr)?
-        } else {
-            UdpSocket::bind("0.0.0.0:0")?
-        };
+        let socket = UdpSocket::bind(local_addr)?;
 
         socket
             .set_nonblocking(true)
             .map_err(|error| io::Error::new(error.kind(), format!("set_nonblocking failed: {error}")))?;
 
-        let peers = state
+        let peers: Vec<(u64, SocketAddr)> = state
             .players
             .iter()
             .filter_map(|player| {
@@ -101,6 +97,23 @@ impl MatchSession {
                 endpoints.get(&player.client_id).copied().map(|address| (player.client_id, address))
             })
             .collect();
+
+        let endpoint_summary = endpoints
+            .iter()
+            .map(|(id, addr)| format!("{id}@{addr}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let peer_summary = peers
+            .iter()
+            .map(|(id, addr)| format!("{id}@{addr}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!(
+            "session init: local_peer={} role={role:?} host_peer={} local_addr={local_addr} host_addr={host_addr:?} endpoints=[{endpoint_summary}] peers=[{peer_summary}]",
+            local_peer_id,
+            state.host_peer_id,
+            role = role,
+        );
 
         Ok(Self {
             role,
@@ -226,6 +239,7 @@ impl MatchSession {
 
         if self.is_host() {
             frames.into_iter().for_each(|frame| {
+                self.send_input_to_peers(frame.clone());
                 self.event_queue
                     .push_back(NetworkEvent::InputReceived(frame));
             });
@@ -253,14 +267,27 @@ impl MatchSession {
         }
     }
 
+    fn send_input_to_peers(&mut self, input: PlayerInputFrame) {
+        let message = NetMessage::Input(input);
+        let payload = encode_message(&message);
+        if let Ok(payload) = payload {
+            self.peers.iter().for_each(|(_, peer_addr)| {
+                let _ = self.socket.send_to(&payload, peer_addr);
+            });
+        }
+    }
+
     fn receive_packets(&mut self) {
         let mut buffer = [0_u8; 65_536];
         loop {
             match self.socket.recv_from(&mut buffer) {
                 Ok((size, _from)) => {
-                    if let Ok(message) = decode_message(&buffer[..size]) {
-                        match message {
+                        if let Ok(message) = decode_message(&buffer[..size]) {
+                            match message {
                             NetMessage::Input(frame) => {
+                                if self.is_host() {
+                                    self.send_input_to_peers(frame.clone());
+                                }
                                 self.event_queue.push_back(NetworkEvent::InputReceived(frame));
                             }
                             NetMessage::HostHash { .. } => {

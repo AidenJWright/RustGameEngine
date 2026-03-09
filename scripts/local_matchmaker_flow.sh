@@ -3,19 +3,68 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-MATCHMAKER_ADDR="${1:-127.0.0.1:7000}"
-HOST_GAME_ADDR="${2:-127.0.0.1:7101}"
-CLIENT_GAME_ADDR="${3:-127.0.0.1:7102}"
-HOST_NAME="${4:-Player-One}"
-CLIENT_NAME="${5:-Player-Two}"
-RUN_SECONDS="${6:-120}"
+PLAYER_COUNT=2
+POSITIONAL_ARGS=()
 
-HOST_LOG="$ROOT_DIR/matchmaker-host.log"
-CLIENT_LOG="$ROOT_DIR/matchmaker-client.log"
-MATCHMAKER_LOG="$ROOT_DIR/matchmaker-server.log"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -p|--players)
+      if [[ $# -lt 2 ]]; then
+        echo "missing value for $1"
+        exit 1
+      fi
+      PLAYER_COUNT="$2"
+      shift 2
+      ;;
+    -h|--help)
+      cat <<'USAGE'
+Usage: scripts/local_matchmaker_flow.sh [--players N] [MATCHMAKER_ADDR] [HOST_GAME_ADDR] [CLIENT_GAME_ADDR] [HOST_NAME] [CLIENT_NAME] [RUN_SECONDS]
+
+Options:
+  -p, --players N    Number of game instances to launch (1-4, default: 2)
+
+Positionals (all optional):
+  MATCHMAKER_ADDR      Matchmaker bind addr (default: 127.0.0.1:7000)
+  HOST_GAME_ADDR       Host game addr (default: 127.0.0.1:7101)
+  CLIENT_GAME_ADDR     Base client game addr; extra clients increment port (default: 127.0.0.1:7102)
+  HOST_NAME            Host player name (default: Player-One)
+  CLIENT_NAME          First client name (default: Player-Two); extra clients add numeric suffixes
+  RUN_SECONDS          Runtime before auto-stop, 0 means run until Ctrl+C (default: 0)
+USAGE
+      exit 0
+      ;;
+    *)
+      POSITIONAL_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if ! [[ "$PLAYER_COUNT" =~ ^[1-4]$ ]]; then
+  echo "--players must be an integer in range 1-4"
+  exit 1
+fi
+
+MATCHMAKER_ADDR="${POSITIONAL_ARGS[0]:-127.0.0.1:7000}"
+HOST_GAME_ADDR="${POSITIONAL_ARGS[1]:-127.0.0.1:7101}"
+CLIENT_GAME_ADDR="${POSITIONAL_ARGS[2]:-127.0.0.1:7102}"
+HOST_NAME="${POSITIONAL_ARGS[3]:-Player-One}"
+CLIENT_NAME="${POSITIONAL_ARGS[4]:-Player-Two}"
+RUN_SECONDS="${POSITIONAL_ARGS[5]:-0}"
+
+CLIENT_HOST="${CLIENT_GAME_ADDR%:*}"
+CLIENT_BASE_PORT="${CLIENT_GAME_ADDR##*:}"
+if [[ "$CLIENT_HOST" == "$CLIENT_GAME_ADDR" ]] || ! [[ "$CLIENT_BASE_PORT" =~ ^[0-9]+$ ]]; then
+  echo "CLIENT_GAME_ADDR must be host:port, got '$CLIENT_GAME_ADDR'"
+  exit 1
+fi
+
+HOST_LOG="$ROOT_DIR/logs/matchmaker-host.log"
+MATCHMAKER_LOG="$ROOT_DIR/logs/matchmaker-server.log"
+CLIENT_LOGS=()
+CLIENT_PIDS=()
 
 : >"$HOST_LOG"
-: >"$CLIENT_LOG"
 : >"$MATCHMAKER_LOG"
 
 run_game() {
@@ -91,10 +140,13 @@ cleanup() {
     wait "$HOST_PID" 2>/dev/null || true
   fi
 
-  if [[ -n "${CLIENT_PID:-}" ]] && kill -0 "$CLIENT_PID" 2>/dev/null; then
-    kill "$CLIENT_PID" 2>/dev/null || true
-    wait "$CLIENT_PID" 2>/dev/null || true
-  fi
+  local pid
+  for pid in "${CLIENT_PIDS[@]:-}"; do
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+    fi
+  done
 }
 
 trap cleanup EXIT
@@ -121,19 +173,43 @@ LOBBY_CODE="${LOBBY_AND_ID%%:*}"
 HOST_ID="${LOBBY_AND_ID##*:}"
 echo "host_client_id=$HOST_ID, lobby_code=$LOBBY_CODE"
 
-echo "[4/5] starting client runtime for lobby $LOBBY_CODE"
-(run_game join "$LOBBY_CODE" "$CLIENT_NAME" "$CLIENT_GAME_ADDR" >"$CLIENT_LOG" 2>&1) &
-CLIENT_PID=$!
+if (( PLAYER_COUNT > 1 )); then
+  echo "[4/5] starting $((PLAYER_COUNT - 1)) client runtime(s) for lobby $LOBBY_CODE"
+  for (( i=1; i<PLAYER_COUNT; i++ )); do
+    client_port=$((CLIENT_BASE_PORT + i - 1))
+    client_addr="$CLIENT_HOST:$client_port"
+    if (( i == 1 )); then
+      client_name="$CLIENT_NAME"
+    else
+      client_name="$CLIENT_NAME-$((i + 1))"
+    fi
+    client_log="$ROOT_DIR/logs/matchmaker-client-$((i + 1)).log"
+    : >"$client_log"
+
+    (run_game join "$LOBBY_CODE" "$client_name" "$client_addr" >"$client_log" 2>&1) &
+    client_pid=$!
+
+    CLIENT_PIDS+=("$client_pid")
+    CLIENT_LOGS+=("$client_log")
+    echo "  started client $((i + 1)): name=$client_name addr=$client_addr log=$client_log"
+  done
+else
+  echo "[4/5] launching host only (--players=1)"
+fi
 
 if (( RUN_SECONDS > 0 )); then
-  echo "[5/5] running both clients for $RUN_SECONDS seconds"
+  echo "[5/5] running launched game(s) for $RUN_SECONDS seconds"
   sleep "$RUN_SECONDS"
   echo "Demo runtime complete."
 else
-  echo "[5/5] running both clients; press Ctrl+C to stop"
+  echo "[5/5] running launched game(s); press Ctrl+C to stop"
   wait "$HOST_PID"
 fi
 
 echo "Matchmaker log: $MATCHMAKER_LOG"
 echo "Host runtime log: $HOST_LOG"
-echo "Client runtime log: $CLIENT_LOG"
+if (( ${#CLIENT_LOGS[@]} > 0 )); then
+  for client_log in "${CLIENT_LOGS[@]}"; do
+    echo "Client runtime log: $client_log"
+  done
+fi

@@ -12,12 +12,13 @@ use clap::Parser;
 use rand::Rng;
 
 use forge_ecs::multiplayer::matchmaking::{
-    deserialize_request, send_match_event, MatchEvent, MatchRequest, MAX_PLAYERS, MIN_PLAYERS,
+    deserialize_request, send_match_event, MatchEvent, MatchRequest, MAX_PLAYERS,
     PlayerInfo, LobbyState,
 };
 
 const MATCHMAKER_TICK_MS: u64 = 125;
 const STALE_CLIENT_SECS: u64 = 45;
+const AUTO_START_AFTER_SECS: u64 = 15;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -47,7 +48,7 @@ struct Lobby {
     started: bool,
     /// Shared deterministic seed used for host election.
     shared_seed: u64,
-    /// Host selection memoized after start.
+    /// Host is fixed by creator unless no longer present at start.
     host_client_id: Option<u64>,
 }
 
@@ -82,6 +83,8 @@ fn main() {
                 _ => eprintln!("matchmaker packet error: {error}"),
             }
         }
+
+        maybe_auto_start_lobbies(&socket, &mut lobbies);
 
         if last_cleanup.elapsed() >= Duration::from_secs(1) {
             remove_stale_players(&mut lobbies, Duration::from_secs(STALE_CLIENT_SECS));
@@ -212,18 +215,8 @@ fn process_tick(
             }
         }
         MatchRequest::StartMatch { lobby_code } => {
-            if try_start_match(socket, lobbies, &lobby_code) {
+            if maybe_auto_start(socket, lobbies, &lobby_code) {
                 println!("match-start: lobby={lobby_code}");
-            } else {
-                send_match_event(
-                    socket,
-                    &remote_addr,
-                    &MatchEvent::Error {
-                        message: format!(
-                            "could not start lobby {lobby_code}: missing lobby, too few players, or already started"
-                        ),
-                    },
-                )?;
             }
         }
         MatchRequest::Heartbeat {
@@ -272,7 +265,7 @@ fn create_lobby(
         last_activity: now,
         started: false,
         shared_seed: rand::thread_rng().gen(),
-        host_client_id: None,
+        host_client_id: Some(client_id),
     };
 
     let state = lobby_state_for(&lobby);
@@ -379,8 +372,44 @@ fn heartbeat_lobby(
     Ok(())
 }
 
-fn maybe_auto_start(socket: &UdpSocket, lobbies: &mut HashMap<String, Lobby>, lobby_code: &str) {
-    if try_start_match(socket, lobbies, lobby_code) {}
+fn maybe_auto_start(socket: &UdpSocket, lobbies: &mut HashMap<String, Lobby>, lobby_code: &str) -> bool {
+    let should_start = lobbies
+        .get(lobby_code)
+        .map(should_auto_start_lobby)
+        .unwrap_or(false);
+    if !should_start {
+        return false;
+    }
+    try_start_match(socket, lobbies, lobby_code)
+}
+
+fn maybe_auto_start_lobbies(socket: &UdpSocket, lobbies: &mut HashMap<String, Lobby>) {
+    let to_start: Vec<String> = lobbies
+        .iter()
+        .filter_map(|(code, lobby)| {
+            if should_auto_start_lobby(lobby) {
+                Some(code.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    for code in to_start {
+        if try_start_match(socket, lobbies, &code) {
+            println!("match-start: lobby={code}");
+        }
+    }
+}
+
+fn should_auto_start_lobby(lobby: &Lobby) -> bool {
+    if lobby.started || lobby.players.is_empty() {
+        return false;
+    }
+
+    let lobby_is_full = lobby.players.len() >= MAX_PLAYERS;
+    let timeout_elapsed = lobby.created_at.elapsed() >= Duration::from_secs(AUTO_START_AFTER_SECS);
+    lobby_is_full || timeout_elapsed
 }
 
 fn try_start_match(
@@ -393,7 +422,7 @@ fn try_start_match(
         None => return false,
     };
 
-    if lobby.started || lobby.players.len() < MIN_PLAYERS {
+    if lobby.started || lobby.players.is_empty() {
         return false;
     }
 
@@ -402,7 +431,14 @@ fn try_start_match(
         return false;
     }
 
-    let host_client_id = select_host_client_id(lobby.shared_seed, &mut player_ids);
+    let host_client_id = match lobby.host_client_id {
+        Some(host) if lobby.players.contains_key(&host) => host,
+        _ => {
+            let host = select_host_client_id(lobby.shared_seed, &mut player_ids);
+            lobby.host_client_id = Some(host);
+            host
+        }
+    };
     let mut endpoints = lobby_state_for(lobby).players;
     endpoints.sort_by_key(|player| player.client_id);
 
@@ -506,4 +542,59 @@ fn generate_lobby_code() -> String {
         code.push(charset[idx] as char);
     }
     code
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_lobby(player_count: usize, created_ago: Duration, started: bool) -> Lobby {
+        let now = Instant::now();
+        let mut players = HashMap::new();
+        for id in 1..=player_count as u64 {
+            players.insert(
+                id,
+                LobbyPlayer {
+                    id,
+                    info: PlayerInfo {
+                        client_id: id,
+                        name: format!("P{id}"),
+                        game_addr: format!("127.0.0.1:{}", 7000 + id),
+                    },
+                    remote_addr: format!("127.0.0.1:{}", 9000 + id)
+                        .parse()
+                        .expect("valid test socket"),
+                    last_seen: now,
+                },
+            );
+        }
+
+        Lobby {
+            code: "ABC123".to_string(),
+            players,
+            created_at: now - created_ago,
+            last_activity: now,
+            started,
+            shared_seed: 42,
+            host_client_id: Some(1),
+        }
+    }
+
+    #[test]
+    fn does_not_auto_start_with_two_players_before_timeout() {
+        let lobby = test_lobby(2, Duration::from_secs(5), false);
+        assert!(!should_auto_start_lobby(&lobby));
+    }
+
+    #[test]
+    fn auto_starts_when_lobby_is_full() {
+        let lobby = test_lobby(MAX_PLAYERS, Duration::from_secs(1), false);
+        assert!(should_auto_start_lobby(&lobby));
+    }
+
+    #[test]
+    fn auto_starts_after_timeout_even_if_not_full() {
+        let lobby = test_lobby(2, Duration::from_secs(AUTO_START_AFTER_SECS), false);
+        assert!(should_auto_start_lobby(&lobby));
+    }
 }

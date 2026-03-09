@@ -1,12 +1,13 @@
 //! `Transform` component — position, rotation, scale in 3D.
 
+use serde::{Deserialize, Serialize};
 use super::vec3::Vec3;
 use super::mat4::Mat4;
 
 /// Spatial transform: position (Vec3), rotation around Z (radians), scale (Vec3).
 ///
 /// This is a **component** — plain data, no methods beyond `into_matrix`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Transform {
     /// World-space position.
     pub position: Vec3,

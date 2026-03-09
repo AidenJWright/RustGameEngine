@@ -3,7 +3,8 @@
     "allow": [
       "Bash(cargo build)",
       "Bash(export PATH=\"$PATH:/c/Users/Home/.cargo/bin\")",
-      "Bash(export PATH=\"$PATH:/c/Users/Home/.cargo/bin:/usr/bin:/bin\")"
+      "Bash(export PATH=\"$PATH:/c/Users/Home/.cargo/bin:/usr/bin:/bin\")",
+      "Bash(cargo build --bins)"
     ],
     "additionalDirectories": [
       "C:\\Users\\Home\\.claude\\projects\\c--dev-RustGameEngine"

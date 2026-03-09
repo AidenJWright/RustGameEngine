@@ -1,9 +1,10 @@
 //! 2-component float vector.
 
 use std::ops::{Add, Mul, Neg, Sub};
+use serde::{Deserialize, Serialize};
 
 /// A 2D vector with `f32` components.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct Vec2 {
     pub x: f32,
     pub y: f32,

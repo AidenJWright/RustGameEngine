@@ -7,6 +7,7 @@
 //!    `y = base_y + amplitude * sin(frequency * elapsed + phase)`.
 //! 4. Queue `CommandBuffer::insert` with the updated transform.
 
+use serde::{Deserialize, Serialize};
 use crate::ecs::command_buffer::CommandBuffer;
 use crate::ecs::component::Component;
 use crate::ecs::resource::ElapsedTime;
@@ -15,7 +16,7 @@ use crate::ecs::world::World;
 use crate::components::Transform;
 
 /// Data component that drives sinusoidal Y motion.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SinusoidComponent {
     /// Peak displacement from `base_y` in world units.
     pub amplitude: f32,

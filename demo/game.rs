@@ -8,6 +8,7 @@
 #![warn(clippy::all, clippy::pedantic)]
 #![allow(clippy::too_many_lines)]
 
+use std::collections::HashSet;
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
@@ -66,7 +67,7 @@ enum Mode {
     },
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct InputState {
     left: bool,
     right: bool,
@@ -89,7 +90,8 @@ impl InputState {
         }
     }
 
-    fn apply(&mut self, event: PlatformEvent) {
+    fn apply(&mut self, event: PlatformEvent) -> bool {
+        let before = *self;
         match event {
             PlatformEvent::KeyPressed(KeyCode::Left) => self.left = true,
             PlatformEvent::KeyReleased(KeyCode::Left) => self.left = false,
@@ -101,6 +103,7 @@ impl InputState {
             PlatformEvent::KeyReleased(KeyCode::Down) => self.down = false,
             _ => {}
         }
+        before != *self
     }
 }
 
@@ -108,6 +111,9 @@ impl InputState {
 struct MultiplayerRuntime {
     session: MatchSession,
     tick_accumulator: f32,
+    debug_tick_count: u64,
+    debug_local_input_count: u32,
+    debug_network_event_count: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -130,9 +136,14 @@ struct DemoState {
     bus: MessageBus,
     last_time: Instant,
     player_entities: Vec<(u64, Entity)>,
+    player_slots: Vec<(u64, usize)>,
     local_player_id: u64,
     input_state: InputState,
     multiplayer: Option<MultiplayerRuntime>,
+    render_debug_logged: bool,
+    input_event_print_count: u32,
+    frame_count: u64,
+    render_position_print_count: u32,
 }
 
 struct GameApp {
@@ -151,51 +162,115 @@ impl ApplicationHandler for GameApp {
 
         let window: Window = event_loop.create_window(attrs).expect("failed to create window");
         let mut core = AppCore::from_window(window).expect("AppCore creation failed");
-        let window_width = core.render_ctx.surface_config.width as f32;
-        let window_height = core.render_ctx.surface_config.height as f32;
+        let (window_width, window_height) = {
+            let width = core.render_ctx.surface_config.width;
+            let height = core.render_ctx.surface_config.height;
+            (
+                if width == 0 { 1280.0 } else { width as f32 },
+                if height == 0 { 720.0 } else { height as f32 },
+            )
+        };
 
         let mut bus = MessageBus::new();
         bus.register(LoopPhase::Update, 0, SinusoidSystem);
         bus.register(LoopPhase::Update, 10, MovementSystem);
 
-        let (multiplayer, player_entities, local_player_id, runtime_mode) =
+        let (multiplayer, player_entities, local_player_id, runtime_mode, window_title) =
             match self.pending_session.take() {
                 Some(session) => {
                     let player_entities =
                         setup_multiplayer_scene(&mut core.world, &session, window_width, window_height);
                     let local_player_id = session.local_peer_id();
+                    let window_title = format!(
+                        "Forge ECS -- Game [peer {} {}]",
+                        local_player_id,
+                        if session.is_host() { "host" } else { "client" }
+                    );
 
                     let role = if session.is_host() { "host" } else { "client" };
+                    let role_marker = if session.local_peer_id() == session.host_peer_id() {
+                        " [self is host]"
+                    } else {
+                        ""
+                    };
+                    let peer_summary = session
+                        .peers()
+                        .iter()
+                        .map(|(id, addr)| format!("{id}@{addr}"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
                     let info = format!(
-                        "runtime mode: multiplayer ({role}, local_peer={}, host_peer={})",
+                        "runtime mode: multiplayer ({role}{role_marker}, local_peer={}, host_peer={}, local_addr={}, host_addr={:?}, peers=[{}], shared_seed={})",
                         session.local_peer_id(),
-                        session.host_peer_id()
+                        session.host_peer_id(),
+                        session.local_addr(),
+                        session.host_addr(),
+                        peer_summary,
+                        session.shared_seed(),
                     );
                     (
                         Some(MultiplayerRuntime {
                             session,
                             tick_accumulator: 0.0,
+                            debug_tick_count: 0,
+                            debug_local_input_count: 0,
+                            debug_network_event_count: 0,
                         }),
                         player_entities,
                         local_player_id,
                         info,
+                        window_title,
                     )
                 }
                 None => {
                     let (player_entities, local_player_id) =
                         setup_single_player_scene(&mut core.world, window_width, window_height);
-                    (None, player_entities, local_player_id, "runtime mode: single".to_string())
+                    (
+                        None,
+                        player_entities,
+                        local_player_id,
+                        "runtime mode: single".to_string(),
+                        "Forge ECS -- Game [singleplayer]".to_string(),
+                    )
                 }
             };
+
+        let player_slots = player_entities
+            .iter()
+            .enumerate()
+            .map(|(slot, (player_id, _))| (*player_id, slot))
+            .collect::<Vec<_>>();
+
+        println!(
+            "player slot layout peer={} slots={:?} viewport={}x{}",
+            player_entities
+                .iter()
+                .find_map(|(peer_id, _)| if *peer_id == local_player_id { Some(peer_id) } else { None })
+                .unwrap_or(&0),
+            player_slots,
+            window_width as u32,
+            window_height as u32
+        );
+
+        if let Some((_, entity)) = player_entities.first() {
+            println!("first player entity = {entity:?}");
+        }
+
+        let _ = core.platform.window.set_title(&window_title);
 
         self.state = Some(DemoState {
             core,
             bus,
             last_time: Instant::now(),
             player_entities,
+            player_slots,
             local_player_id,
             input_state: InputState::default(),
             multiplayer,
+            render_debug_logged: false,
+            input_event_print_count: 0,
+            frame_count: 0,
+            render_position_print_count: 0,
         });
 
         println!("{runtime_mode}");
@@ -216,13 +291,45 @@ impl ApplicationHandler for GameApp {
 
         match &event {
             WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::Resized(size) => s.core.render_ctx.resize(size.width, size.height),
+            WindowEvent::Resized(size) => {
+                s.core.render_ctx.resize(size.width, size.height);
+                reposition_players(
+                    &mut s.core.world,
+                    &s.player_entities,
+                    &s.player_slots,
+                    size.width as f32,
+                    size.height as f32,
+                );
+                println!(
+                    "window resized peer={} new_size={}x{} anchored_players={:?}",
+                    s.local_player_id,
+                    size.width,
+                    size.height,
+                    s.player_slots
+                );
+            }
             WindowEvent::RedrawRequested => render(s),
+            WindowEvent::Focused(focused) => {
+                println!("window focus peer={} focused={focused}", s.local_player_id);
+            }
             _ => {}
         }
 
         if let Some(platform_event) = map_window_event(&event) {
-            s.input_state.apply(platform_event);
+            let changed = s.input_state.apply(platform_event.clone());
+            if changed && s.input_event_print_count < 18 {
+                if matches!(
+                    platform_event,
+                    PlatformEvent::KeyPressed(_) | PlatformEvent::KeyReleased(_)
+                ) {
+                    let (x, y) = s.input_state.movement_axis();
+                    println!(
+                        "input peer={} event={platform_event:?} axis=({x:.2}, {y:.2})",
+                        s.local_player_id
+                    );
+                    s.input_event_print_count += 1;
+                }
+            }
         }
     }
 
@@ -232,6 +339,7 @@ impl ApplicationHandler for GameApp {
         let now = Instant::now();
         let dt = now.duration_since(s.last_time).as_secs_f32();
         s.last_time = now;
+        s.frame_count += 1;
 
         if let Some(r) = s.core.world.resource_mut::<DeltaTime>() { r.0 = dt; }
         if let Some(r) = s.core.world.resource_mut::<ElapsedTime>() { r.0 += dt; }
@@ -256,6 +364,25 @@ impl ApplicationHandler for GameApp {
     }
 }
 
+fn reposition_players(
+    world: &mut World,
+    player_entities: &[(u64, Entity)],
+    player_slots: &[(u64, usize)],
+    window_width: f32,
+    window_height: f32,
+) {
+    let player_count = player_entities.len().min(4);
+    player_slots.iter().for_each(|(peer_id, slot)| {
+        let entity = player_entities
+            .iter()
+            .find_map(|(id, entity)| if id == peer_id { Some(*entity) } else { None });
+        if let Some(entity) = entity {
+            if let Some(transform) = world.get_mut::<Transform>(entity) {
+                transform.position = spawn_position(*slot, player_count, window_width, window_height);
+            }
+        }
+    });
+}
 fn setup_single_player_scene(
     world: &mut World,
     window_width: f32,
@@ -286,10 +413,17 @@ fn setup_single_player_scene(
 fn setup_multiplayer_scene(world: &mut World, session: &MatchSession, window_width: f32, window_height: f32) -> Vec<(u64, Entity)> {
     let scene_root = world.spawn();
     world.insert(scene_root, Tag::new("scene_root"));
-    let player_count = session.players().len().min(4);
+    let mut players = session.players().to_vec();
+    players.sort_by_key(|player| player.client_id);
+    let player_count = players.len().min(4);
 
-    session
-        .players()
+    println!(
+        "multiplayer start: spawning {} player(s): {:?}",
+        player_count,
+        players.iter().map(|p| p.client_id).collect::<Vec<_>>()
+    );
+
+    let player_entities: Vec<(u64, Entity)> = players
         .iter()
         .take(player_count)
         .enumerate()
@@ -309,9 +443,47 @@ fn setup_multiplayer_scene(world: &mut World, session: &MatchSession, window_wid
                 a: color.a,
             });
             world.insert(circle_entity, Velocity { dx: 0.0, dy: 0.0 });
+            println!(
+                "  spawned player slot {} id={} -> x={:.2}, y={:.2}, radius={} color={:?}",
+                index + 1,
+                player.client_id,
+                position.x,
+                position.y,
+                50.0,
+                PLAYER_COLORS[index % PLAYER_COLORS.len()],
+            );
             (player.client_id, circle_entity)
         })
-        .collect()
+        .collect();
+
+    let unique_entity_count = player_entities
+        .iter()
+        .map(|(_, entity)| *entity)
+        .collect::<HashSet<_>>()
+        .len();
+    if unique_entity_count != player_entities.len() {
+        println!(
+            "WARNING: duplicated entity IDs in multiplayer spawn ({:?})",
+            player_entities
+                .iter()
+                .map(|(_, entity)| format!("{entity:?}"))
+                .collect::<Vec<_>>()
+        );
+    } else {
+        println!(
+            "multiplayer spawn entity uniqueness check passed ({} unique entities)",
+            unique_entity_count
+        );
+    }
+
+    let summary = player_entities
+        .iter()
+        .map(|(id, entity)| format!("{id}@{entity:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    println!("multiplayer scene entity mapping: [{summary}]");
+
+    player_entities
 }
 
 fn spawn_position(player_index: usize, total_players: usize, window_width: f32, window_height: f32) -> Vec3 {
@@ -344,7 +516,7 @@ fn apply_local_velocity(world: &mut World, entity: Entity, input_state: &InputSt
     }
 }
 
-fn apply_player_velocity(world: &mut World, player_entities: &[(u64, Entity)], player_id: u64, move_x: f32, move_y: f32) {
+fn apply_player_velocity(world: &mut World, player_entities: &[(u64, Entity)], player_id: u64, move_x: f32, move_y: f32) -> bool {
     let move_speed = 220.0;
     let maybe_entity = player_entities
         .iter()
@@ -355,8 +527,10 @@ fn apply_player_velocity(world: &mut World, player_entities: &[(u64, Entity)], p
         if let Some(velocity) = world.get_mut::<Velocity>(entity) {
             velocity.dx = move_x * move_speed;
             velocity.dy = move_y * move_speed;
+            return true;
         }
     }
+    false
 }
 
 fn apply_multiplayer_tick(
@@ -375,6 +549,16 @@ fn apply_multiplayer_tick(
         runtime.tick_accumulator -= tick_dt;
 
         let (move_x, move_y) = input_state.movement_axis();
+        runtime.debug_tick_count += 1;
+        if move_x != 0.0 || move_y != 0.0 || runtime.debug_tick_count <= 12 {
+            println!(
+                "tick={} local_peer={} sending axis=({:.2}, {:.2})",
+                runtime.session.current_tick(),
+                local_player_id,
+                move_x,
+                move_y
+            );
+        }
         let input = InputFrame {
             tick: runtime.session.current_tick(),
             player_id: runtime.session.local_peer_id(),
@@ -384,37 +568,159 @@ fn apply_multiplayer_tick(
         };
 
         runtime.session.enqueue_local_input(input);
-        apply_player_velocity(world, player_entities, local_player_id, move_x, move_y);
+        if !apply_player_velocity(world, player_entities, local_player_id, move_x, move_y)
+            && runtime.debug_local_input_count < 12
+        {
+            println!(
+                "local input had no mapped entity for player {local_player_id}; players={:?}",
+                player_entities
+                    .iter()
+                    .map(|(id, _)| id)
+                    .collect::<Vec<_>>()
+            );
+            runtime.debug_local_input_count += 1;
+        }
 
         // Transport send/receive and local input staging happen inside `MatchSession::tick`.
         runtime.session.tick();
-        runtime.session.drain_network_events().into_iter().for_each(|event| {
+        let events = runtime.session.drain_network_events();
+        for event in events {
             match event {
                 NetworkEvent::CorrectionReceived { snapshot, .. } => {
                     apply_snapshot(world, &snapshot);
                 }
                 NetworkEvent::InputReceived(input) => {
                     let InputFrame { player_id, move_x, move_y, .. } = input;
-                    apply_player_velocity(world, player_entities, player_id, move_x, move_y);
+                    let has_motion = move_x != 0.0 || move_y != 0.0;
+                    if has_motion || runtime.debug_network_event_count < 24 {
+                        println!(
+                            "tick={} net input player={player_id} axis=({move_x:.2}, {move_y:.2})",
+                            runtime.session.current_tick()
+                        );
+                        runtime.debug_network_event_count += 1;
+                        if runtime.debug_network_event_count > 24 && has_motion {
+                            runtime.debug_network_event_count = 24;
+                        }
+                    }
+                    if !apply_player_velocity(world, player_entities, player_id, move_x, move_y) {
+                        println!("net input mapped to no entity: player {player_id}");
+                    }
                 }
                 NetworkEvent::HashMismatch { .. } => {}
             }
-        });
+        }
     }
 }
 
 fn render(s: &mut DemoState) {
     let Some((surface_texture, view)) = s.core.render_ctx.begin_frame() else { return; };
 
+    let width = s.core.render_ctx.surface_config.width as f32;
+    let height = s.core.render_ctx.surface_config.height as f32;
+    let mut draw_count = 0_usize;
+    let mut queued_cmd_count = 0_usize;
     let mut encoder = s.core.render_ctx.device.create_command_encoder(
         &wgpu::CommandEncoderDescriptor { label: Some("game frame") },
     );
 
     s.core.world.query3::<Transform, Shape, Color>()
         .for_each(|(_, transform, shape, color)| {
+            if matches!(shape, Shape::Circle { .. }) {
+                draw_count += 1;
+            }
             let cmd = make_draw_cmd(&transform, shape, color);
+            if queued_cmd_count < 4 && s.frame_count < 8 {
+                match cmd {
+                    DrawCommand::Circle { x, y, radius, .. } => {
+                        println!(
+                            "  render cmd[{}]=Circle pos=({x:.2},{y:.2}) r={radius:.2} offscreen={}",
+                            queued_cmd_count,
+                            x - radius < 0.0
+                                || y - radius < 0.0
+                                || x + radius > width
+                                || y + radius > height
+                        );
+                    }
+                    DrawCommand::Rect { x, y, width: cmd_width, height: cmd_height, .. } => {
+                        println!(
+                            "  render cmd[{}]=Rect pos=({x:.2},{y:.2}) w={cmd_width:.2} h={cmd_height:.2} offscreen={}",
+                            queued_cmd_count,
+                            x < 0.0
+                                || y < 0.0
+                                || x + cmd_width > width
+                                || y + cmd_height > height
+                        );
+                    }
+                }
+            }
             s.core.draw_queue.push(cmd);
+            queued_cmd_count += 1;
         });
+    if s.frame_count < 8 {
+        println!(
+            "render pass resolution {:.1}x{:.1}",
+            width,
+            height
+        );
+        println!(
+            "render queue build: world_draw_queries={} draw_queue_before_flush={}",
+            draw_count,
+            queued_cmd_count
+        );
+    }
+
+    if !s.render_debug_logged {
+        println!("render debug: rendered_circles={draw_count}, mapped_players={}", s.player_entities.len());
+        for (id, entity) in &s.player_entities {
+            if let Some(transform) = s.core.world.get::<Transform>(*entity) {
+                let color = s
+                    .core
+                    .world
+                    .get::<Color>(*entity)
+                    .map(|color| (color.r, color.g, color.b, color.a));
+                let shape_radius = s
+                    .core
+                    .world
+                    .get::<Shape>(*entity)
+                    .and_then(|shape| if let Shape::Circle { radius } = shape.clone() {
+                        Some(radius)
+                    } else {
+                        None
+                    });
+                println!(
+                    "  render debug: player={id} entity={entity:?} pos=({:.2}, {:.2}) radius={:?} color={:?}",
+                    transform.position.x,
+                    transform.position.y,
+                    shape_radius,
+                    color
+                );
+            } else {
+                println!("  render debug: player={id} entity={entity:?} missing Transform");
+            }
+        }
+        s.render_debug_logged = true;
+    }
+
+    if s.render_position_print_count < 24 && (s.frame_count == 1 || s.frame_count % 120 == 0) {
+        println!("frame {} render_position_check mapped_players={}", s.frame_count, s.player_entities.len());
+        for (id, entity) in &s.player_entities {
+            if let Some(transform) = s.core.world.get::<Transform>(*entity) {
+                let velocity = s.core.world
+                    .get::<Velocity>(*entity)
+                    .cloned()
+                    .unwrap_or(Velocity { dx: 0.0, dy: 0.0 });
+                println!(
+                    "  frame {} peer={id} pos=({:.2},{:.2}) vel=({:.2},{:.2})",
+                    s.frame_count,
+                    transform.position.x,
+                    transform.position.y,
+                    velocity.dx,
+                    velocity.dy,
+                );
+            }
+        }
+        s.render_position_print_count += 1;
+    }
 
     s.core.draw_queue.flush(
         &s.core.render_ctx,
@@ -479,7 +785,9 @@ fn bootstrap_session(mode: &Mode, matchmaker_addr: &str) -> io::Result<Option<Ma
                 }
             };
 
-            println!("host lobby created: code={lobby_code}, player={local_player_id}");
+            println!(
+                "host lobby created: code={lobby_code}, player={local_player_id}, game_addr={game_addr}"
+            );
             let state = await_match_start(
                 &socket,
                 &addr,
@@ -520,7 +828,9 @@ fn bootstrap_session(mode: &Mode, matchmaker_addr: &str) -> io::Result<Option<Ma
                 }
             };
 
-            println!("joined lobby: code={lobby_code}, player={local_player_id}");
+            println!(
+                "joined lobby: code={lobby_code}, player={local_player_id}, game_addr={game_addr}"
+            );
             let state = await_match_start(
                 &socket,
                 &addr,
@@ -578,6 +888,14 @@ fn await_match_start(
 
         match recv_match_event(socket) {
             Ok(MatchEvent::MatchStart { lobby_code: started_code, host_client_id, seed, player_endpoints }) => {
+                let participants = player_endpoints
+                    .iter()
+                    .map(|player| format!("{}@{}", player.client_id, player.game_addr))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                println!(
+                    "match-start: lobby={started_code} host={host_client_id} seed={seed} players=[{participants}]"
+                );
                 if started_code == lobby_code {
                     return Ok(MatchState {
                         lobby_code: started_code,

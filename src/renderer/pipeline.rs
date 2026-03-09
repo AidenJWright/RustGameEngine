@@ -69,8 +69,11 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOut {
     // World-space position of this vertex.
     let world_pos = u.position + corner * u.size;
 
-    // Convert world space (origin = screen centre, Y up) to NDC.
-    let ndc = world_pos / (u.resolution * 0.5);
+    // Convert world space (origin = top-left, Y down) to NDC.
+    let ndc = vec2<f32>(
+        world_pos.x / u.resolution.x * 2.0 - 1.0,
+        1.0 - (world_pos.y / u.resolution.y * 2.0),
+    );
 
     var out: VertexOut;
     out.clip_pos = vec4<f32>(ndc.x, ndc.y, 0.0, 1.0);
@@ -208,7 +211,11 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOut {
         vec2<f32>( 0.5,  0.5),
     );
     let world_pos = u.position + corners[vi] * u.size;
-    let ndc = world_pos / (u.resolution * 0.5);
+    // Convert world space (origin = top-left, Y down) to NDC.
+    let ndc = vec2<f32>(
+        world_pos.x / u.resolution.x * 2.0 - 1.0,
+        1.0 - (world_pos.y / u.resolution.y * 2.0),
+    );
     var out: VertexOut;
     out.clip_pos = vec4<f32>(ndc.x, ndc.y, 0.0, 1.0);
     return out;

@@ -94,7 +94,7 @@ impl ApplicationHandler for DemoApp {
 
         let circle_entity = world.spawn_child(scene_root);
         world.insert(circle_entity, Transform {
-            position: Vec3::new(-200.0, 0.0, 0.0),
+            position: Vec3::new(800.0, 0.0, 0.0),
             ..Transform::identity()
         });
         world.insert(circle_entity, Shape::Circle { radius: 50.0 });
@@ -108,7 +108,7 @@ impl ApplicationHandler for DemoApp {
 
         let rect_entity = world.spawn_child(scene_root);
         world.insert(rect_entity, Transform {
-            position: Vec3::new(200.0, 0.0, 0.0),
+            position: Vec3::new(400.0, 0.0, 0.0),
             ..Transform::identity()
         });
         world.insert(rect_entity, Shape::Rect { width: 100.0, height: 100.0 });

@@ -70,13 +70,10 @@ impl GameRunner {
     }
 
     fn render(&mut self, core: &mut AppCore) {
-        let w = core.render_ctx.surface_config.width  as f32;
-        let h = core.render_ctx.surface_config.height as f32;
-
-        // Queue scene draw commands (world-space → centred screen-space).
+        // Queue scene draw commands (world-space → screen-space with top-left origin).
         core.world.query3::<Transform, Shape, Color>()
             .for_each(|(_, transform, shape, color)| {
-                let cmd = make_draw_cmd(transform, shape, color, w, h);
+                let cmd = make_draw_cmd(transform, shape, color);
                 core.draw_queue.push(cmd);
             });
 
@@ -164,30 +161,22 @@ impl ApplicationHandler for GameHandle {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Convert a `(Transform, Shape, Color)` triple to a centred `DrawCommand`.
-///
-/// The renderer's coordinate system has (0, 0) at top-left, but the demo
-/// treats (0, 0) as the viewport centre.  This helper offsets by half the
-/// viewport so that world-origin sits at screen-centre.
+/// Convert a `(Transform, Shape, Color)` triple to a screen-space `DrawCommand`.
 pub(crate) fn make_draw_cmd(
     transform: &Transform,
     shape: &Shape,
     color: &Color,
-    viewport_w: f32,
-    viewport_h: f32,
 ) -> DrawCommand {
-    let cx = viewport_w  * 0.5;
-    let cy = viewport_h * 0.5;
     match shape {
         Shape::Circle { radius } => DrawCommand::Circle {
-            x:      transform.position.x + cx,
-            y:      transform.position.y + cy,
+            x:      transform.position.x,
+            y:      transform.position.y,
             radius: *radius,
             color: [color.r, color.g, color.b, color.a],
         },
         Shape::Rect { width, height } => DrawCommand::Rect {
-            x:      transform.position.x + cx,
-            y:      transform.position.y + cy,
+            x:      transform.position.x,
+            y:      transform.position.y,
             width:  *width,
             height: *height,
             color: [color.r, color.g, color.b, color.a],

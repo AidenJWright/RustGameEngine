@@ -1,7 +1,7 @@
 //! Standalone Renet-targeted matchmaker control plane.
 //!
 //! Uses UDP request/response messages from [`forge_ecs::multiplayer::matchmaking`]
-//! to create/join lobbies, broadcast lobby state, and assign a random host.
+//! to create/join lobbies, broadcast lobby state, and assign a deterministic host.
 
 use std::collections::HashMap;
 use std::io;
@@ -45,6 +45,10 @@ struct Lobby {
     created_at: Instant,
     last_activity: Instant,
     started: bool,
+    /// Shared deterministic seed used for host election.
+    shared_seed: u64,
+    /// Host selection memoized after start.
+    host_client_id: Option<u64>,
 }
 
 fn main() {
@@ -64,7 +68,7 @@ fn main() {
     let mut lobbies: HashMap<String, Lobby> = HashMap::new();
     let mut next_client_id: u64 = 1;
     let mut last_cleanup = Instant::now();
-    let mut buffer = [0u8; 65_536];
+    let mut buffer = [0_u8; 65_536];
 
     loop {
         if let Err(error) = process_tick(
@@ -80,7 +84,7 @@ fn main() {
         }
 
         if last_cleanup.elapsed() >= Duration::from_secs(1) {
-            remove_stale_players(&socket, &mut lobbies, Duration::from_secs(STALE_CLIENT_SECS));
+            remove_stale_players(&mut lobbies, Duration::from_secs(STALE_CLIENT_SECS));
             last_cleanup = Instant::now();
         }
     }
@@ -158,7 +162,7 @@ fn process_tick(
                             lobby,
                             MatchEvent::LobbyUpdated {
                                 lobby_code: lobby_code.clone(),
-                                lobby: lobby_state.clone(),
+                                lobby: lobby_state,
                             },
                         )?;
                     }
@@ -175,39 +179,36 @@ fn process_tick(
             }
         }
         MatchRequest::LeaveLobby { lobby_code, client_id } => {
-            if let Some(lobby) = lobbies.get_mut(&lobby_code) {
-                if lobby.players.remove(&client_id).is_some() {
-                    lobby.last_activity = Instant::now();
-                    if lobby.players.is_empty() {
-                        lobbies.remove(&lobby_code);
-                        return Ok(());
-                    }
-                    let lobby_state = lobby_state_for(lobby);
+            match leave_lobby(lobbies, &lobby_code, client_id) {
+                Ok(None) => {
+                    println!("leave-lobby: player_id={client_id} lobby={lobby_code}");
+                }
+                Ok(Some(mut lobby)) => {
+                    let lobby_state = lobby_state_for(&mut lobby);
                     broadcast_lobby(
                         socket,
-                        lobby,
+                        &lobby,
                         MatchEvent::LobbyUpdated {
                             lobby_code: lobby_code.clone(),
                             lobby: lobby_state,
                         },
                     )?;
-                } else {
+                }
+                Err(error) => {
                     send_match_event(
                         socket,
                         &remote_addr,
                         &MatchEvent::Error {
-                            message: format!("player {client_id} not in lobby {lobby_code}"),
+                            message: error.to_string(),
                         },
                     )?;
+                    println!("leave-lobby failed from {remote_addr}: {error}");
                 }
-            } else {
-                send_match_event(
-                    socket,
-                    &remote_addr,
-                    &MatchEvent::Error {
-                        message: format!("lobby {lobby_code} not found"),
-                    },
-                )?;
+            }
+            if let Some(lobby) = lobbies.get(&lobby_code) {
+                if lobby.players.is_empty() {
+                    lobbies.remove(&lobby_code);
+                }
             }
         }
         MatchRequest::StartMatch { lobby_code } => {
@@ -270,14 +271,18 @@ fn create_lobby(
         created_at: now,
         last_activity: now,
         started: false,
-    };
-    lobbies.insert(lobby_code.clone(), lobby);
-    (lobby_code.clone(), client_id, LobbyState {
-        lobby_code: lobby_code.clone(),
-        players: vec![lobby_state_for_id(&lobby_code, client_id, &lobbies)],
-        started: false,
+        shared_seed: rand::thread_rng().gen(),
         host_client_id: None,
-    })
+    };
+
+    let state = lobby_state_for(&lobby);
+    lobbies.insert(lobby_code.clone(), lobby);
+
+    (
+        lobby_code.clone(),
+        client_id,
+        state,
+    )
 }
 
 fn join_lobby(
@@ -326,6 +331,30 @@ fn join_lobby(
     Ok((client_id, state))
 }
 
+fn leave_lobby<'a>(
+    lobbies: &'a mut HashMap<String, Lobby>,
+    lobby_code: &str,
+    client_id: u64,
+) -> io::Result<Option<&'a mut Lobby>> {
+    let lobby = lobbies
+        .get_mut(lobby_code)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "lobby not found"))?;
+
+    if !lobby.started && lobby.host_client_id == Some(client_id) {
+        lobby.host_client_id = None;
+    }
+
+    if lobby.players.remove(&client_id).is_none() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("player {client_id} not in lobby {lobby_code}"),
+        ));
+    }
+
+    lobby.last_activity = Instant::now();
+    Ok(Some(lobby))
+}
+
 fn heartbeat_lobby(
     lobbies: &mut HashMap<String, Lobby>,
     lobby_code: &str,
@@ -368,36 +397,33 @@ fn try_start_match(
         return false;
     }
 
-    let now = Instant::now();
-    let mut rng = rand::thread_rng();
     let mut player_ids: Vec<u64> = lobby.players.keys().copied().collect();
     if player_ids.is_empty() {
         return false;
     }
-    let host_client_id = player_ids.remove(rng.gen_range(0..player_ids.len()));
 
+    let host_client_id = select_host_client_id(lobby.shared_seed, &mut player_ids);
     let mut endpoints = lobby_state_for(lobby).players;
     endpoints.sort_by_key(|player| player.client_id);
-    let seed = rng.gen::<u64>();
 
     lobby.started = true;
-    lobby.last_activity = now;
+    lobby.host_client_id = Some(host_client_id);
+    lobby.last_activity = Instant::now();
+
     let event = MatchEvent::MatchStart {
         lobby_code: lobby_code.to_string(),
         host_client_id,
-        seed,
+        seed: lobby.shared_seed,
         player_endpoints: endpoints.clone(),
     };
+
     broadcast_lobby(socket, lobby, event).is_ok()
 }
 
-fn remove_stale_players(
-    socket: &UdpSocket,
-    lobbies: &mut HashMap<String, Lobby>,
-    timeout: Duration,
-) {
+fn remove_stale_players(lobbies: &mut HashMap<String, Lobby>, timeout: Duration) {
     let now = Instant::now();
-    let empty_lobbies: Vec<String> = Vec::new();
+    let mut stale_codes: Vec<String> = Vec::new();
+
     for lobby in lobbies.values_mut() {
         let stale_ids: Vec<u64> = lobby
             .players
@@ -411,30 +437,20 @@ fn remove_stale_players(
             })
             .collect();
 
-        for id in stale_ids.iter().copied() {
-            lobby.players.remove(&id);
-        }
-
-        if !stale_ids.is_empty() {
+        for stale in stale_ids {
+            lobby.players.remove(&stale);
             lobby.last_activity = now;
         }
-    }
 
-    lobbies.retain(|_, lobby| {
         if lobby.players.is_empty() {
-            true
-        } else {
-            false
+            stale_codes.push(lobby.code.clone());
         }
-    });
-
-    for code in empty_lobbies {
-        lobbies.remove(&code);
-        let _ = socket.send_to(
-            b"",
-            "127.0.0.1:0",
-        );
     }
+
+    stale_codes.into_iter().for_each(|code| {
+        lobbies.remove(&code);
+        println!("removed-stale-lobby {code}");
+    });
 }
 
 fn broadcast_lobby(socket: &UdpSocket, lobby: &Lobby, event: MatchEvent) -> io::Result<()> {
@@ -458,20 +474,27 @@ fn lobby_state_for(lobby: &Lobby) -> LobbyState {
             .map(|player| player.info.clone())
             .collect(),
         started: lobby.started,
-        host_client_id: None,
+        host_client_id: lobby.host_client_id,
     }
 }
 
-fn lobby_state_for_id(code: &str, player_id: u64, lobbies: &HashMap<String, Lobby>) -> PlayerInfo {
-    lobbies
-        .get(code)
-        .and_then(|lobby| lobby.players.get(&player_id))
-        .map(|player| player.info.clone())
-        .unwrap_or(PlayerInfo {
-            client_id: player_id,
-            name: "player".to_string(),
-            game_addr: String::new(),
-        })
+fn select_host_client_id(seed: u64, participant_ids: &mut [u64]) -> u64 {
+    if participant_ids.is_empty() {
+        return 0;
+    }
+
+    participant_ids.sort_unstable();
+
+    let mixed = splitmix64(seed ^ (participant_ids.len() as u64).rotate_left(5));
+    let index = (mixed as usize) % participant_ids.len();
+    participant_ids[index]
+}
+
+fn splitmix64(mut x: u64) -> u64 {
+    x = x.wrapping_add(0x9E3779B97F4A7C15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D049BB133111EB);
+    x ^ (x >> 31)
 }
 
 fn generate_lobby_code() -> String {

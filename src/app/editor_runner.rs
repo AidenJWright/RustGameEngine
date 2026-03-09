@@ -80,8 +80,8 @@ impl EditorRunner {
         // --- 1. Build scene draw-commands with camera transform ---
         let draw_cmds: Vec<DrawCommand> = core.world
             .query3::<Transform, Shape, Color>()
-            .map(|(_, t, s, c)| {
-                let raw = make_draw_cmd(t, s, c, 0.0, 0.0); // world-origin coords
+                .map(|(_, t, s, c)| {
+                let raw = make_draw_cmd(t, s, c); // world-origin coords
                 self.state.camera.transform_draw_cmd(raw, w, h)
             })
             .collect();

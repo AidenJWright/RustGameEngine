@@ -8,7 +8,6 @@
 #![warn(clippy::all, clippy::pedantic)]
 #![allow(clippy::too_many_lines)]
 
-use std::f32::consts::PI;
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
@@ -31,7 +30,6 @@ use forge_ecs::multiplayer::{apply_snapshot, InputFrame, MatchSession, MatchStat
 use forge_ecs::platform::{map_window_event, KeyCode, PlatformEvent};
 use forge_ecs::renderer::draw::DrawCommand;
 use forge_ecs::systems::{SinusoidSystem, MovementSystem};
-use forge_ecs::systems::sinusoid::SinusoidComponent;
 use forge_ecs::ecs::entity::Entity;
 use forge_ecs::math::Vec3;
 
@@ -112,12 +110,27 @@ struct MultiplayerRuntime {
     tick_accumulator: f32,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct PlayerColor {
+    r: f32,
+    g: f32,
+    b: f32,
+    a: f32,
+}
+
+const PLAYER_COLORS: [PlayerColor; 4] = [
+    PlayerColor { r: 1.0, g: 0.2, b: 0.2, a: 1.0 },
+    PlayerColor { r: 0.2, g: 0.6, b: 1.0, a: 1.0 },
+    PlayerColor { r: 0.3, g: 0.9, b: 0.3, a: 1.0 },
+    PlayerColor { r: 1.0, g: 1.0, b: 0.2, a: 1.0 },
+];
+
 struct DemoState {
     core: AppCore,
     bus: MessageBus,
     last_time: Instant,
-    circle_entity: Entity,
-    rect_entity: Entity,
+    player_entities: Vec<(u64, Entity)>,
+    local_player_id: u64,
     input_state: InputState,
     multiplayer: Option<MultiplayerRuntime>,
 }
@@ -138,37 +151,49 @@ impl ApplicationHandler for GameApp {
 
         let window: Window = event_loop.create_window(attrs).expect("failed to create window");
         let mut core = AppCore::from_window(window).expect("AppCore creation failed");
-        let (circle_entity, rect_entity) = setup_scene(&mut core.world);
+        let window_width = core.render_ctx.surface_config.width as f32;
+        let window_height = core.render_ctx.surface_config.height as f32;
 
         let mut bus = MessageBus::new();
         bus.register(LoopPhase::Update, 0, SinusoidSystem);
         bus.register(LoopPhase::Update, 10, MovementSystem);
 
-        let (multiplayer, runtime_mode) = match self.pending_session.take() {
-            Some(session) => {
-                let role = if session.is_host() { "host" } else { "client" };
-                let info = format!(
-                    "runtime mode: multiplayer ({role}, local_peer={}, host_peer={})",
-                    session.local_peer_id(),
-                    session.host_peer_id()
-                );
-                (
-                    Some(MultiplayerRuntime {
-                        session,
-                        tick_accumulator: 0.0,
-                    }),
-                    info,
-                )
-            }
-            None => (None, "runtime mode: single".to_string()),
-        };
+        let (multiplayer, player_entities, local_player_id, runtime_mode) =
+            match self.pending_session.take() {
+                Some(session) => {
+                    let player_entities =
+                        setup_multiplayer_scene(&mut core.world, &session, window_width, window_height);
+                    let local_player_id = session.local_peer_id();
+
+                    let role = if session.is_host() { "host" } else { "client" };
+                    let info = format!(
+                        "runtime mode: multiplayer ({role}, local_peer={}, host_peer={})",
+                        session.local_peer_id(),
+                        session.host_peer_id()
+                    );
+                    (
+                        Some(MultiplayerRuntime {
+                            session,
+                            tick_accumulator: 0.0,
+                        }),
+                        player_entities,
+                        local_player_id,
+                        info,
+                    )
+                }
+                None => {
+                    let (player_entities, local_player_id) =
+                        setup_single_player_scene(&mut core.world, window_width, window_height);
+                    (None, player_entities, local_player_id, "runtime mode: single".to_string())
+                }
+            };
 
         self.state = Some(DemoState {
             core,
             bus,
             last_time: Instant::now(),
-            circle_entity,
-            rect_entity,
+            player_entities,
+            local_player_id,
             input_state: InputState::default(),
             multiplayer,
         });
@@ -212,63 +237,140 @@ impl ApplicationHandler for GameApp {
         if let Some(r) = s.core.world.resource_mut::<ElapsedTime>() { r.0 += dt; }
 
         if let Some(multiplayer) = s.multiplayer.as_mut() {
-            apply_multiplayer_tick(multiplayer, dt, &mut s.core.world, s.circle_entity, &s.input_state);
+            apply_multiplayer_tick(
+                multiplayer,
+                dt,
+                &mut s.core.world,
+                s.local_player_id,
+                &s.player_entities,
+                &s.input_state,
+            );
+        } else if let Some(entity) = s.player_entities.iter().find_map(|(id, entity)| {
+            if *id == s.local_player_id { Some(*entity) } else { None }
+        }) {
+            apply_local_velocity(&mut s.core.world, entity, &s.input_state);
         }
 
         s.bus.run_frame(&mut s.core.world);
         s.core.platform.window.request_redraw();
-
-        let _ = s.rect_entity;
     }
 }
 
-fn setup_scene(world: &mut World) -> (Entity, Entity) {
+fn setup_single_player_scene(
+    world: &mut World,
+    window_width: f32,
+    window_height: f32,
+) -> (Vec<(u64, Entity)>, u64) {
     let scene_root = world.spawn();
     world.insert(scene_root, Tag::new("scene_root"));
 
+    let color = PLAYER_COLORS[0];
+    let position = spawn_position(0, 1, window_width, window_height);
     let circle_entity = world.spawn_child(scene_root);
     world.insert(circle_entity, Transform {
-        position: Vec3::new(0.0, 0.0, 0.0),
+        position,
         ..Transform::identity()
     });
     world.insert(circle_entity, Shape::Circle { radius: 50.0 });
-    world.insert(circle_entity, Color { r: 1.0, g: 0.4, b: 0.1, a: 1.0 });
-    /*world.insert(circle_entity, SinusoidComponent {
-        amplitude: 150.0,
-        frequency: 1.0,
-        phase: 0.0,
-        base_y: 0.0,
-    });*/
-
-    let rect_entity = world.spawn_child(scene_root);
-    world.insert(rect_entity, Transform {
-        position: Vec3::new(100.0, 100.0, 0.0),
-        ..Transform::identity()
+    world.insert(circle_entity, Color {
+        r: color.r,
+        g: color.g,
+        b: color.b,
+        a: color.a,
     });
-    world.insert(rect_entity, Shape::Rect { width: 100.0, height: 100.0 });
-    world.insert(rect_entity, Color { r: 0.2, g: 0.6, b: 1.0, a: 1.0 });
-    /*world.insert(rect_entity, SinusoidComponent {
-        amplitude: 150.0,
-        frequency: 1.0,
-        phase: PI / 2.0,
-        base_y: -250.0,
-    });*/
+    world.insert(circle_entity, Velocity { dx: 0.0, dy: 0.0 });
 
-    (circle_entity, rect_entity)
+    (vec![(1, circle_entity)], 1)
+}
+
+fn setup_multiplayer_scene(world: &mut World, session: &MatchSession, window_width: f32, window_height: f32) -> Vec<(u64, Entity)> {
+    let scene_root = world.spawn();
+    world.insert(scene_root, Tag::new("scene_root"));
+    let player_count = session.players().len().min(4);
+
+    session
+        .players()
+        .iter()
+        .take(player_count)
+        .enumerate()
+        .map(|(index, player)| {
+            let position = spawn_position(index, player_count, window_width, window_height);
+            let color = PLAYER_COLORS[index % PLAYER_COLORS.len()];
+            let circle_entity = world.spawn_child(scene_root);
+            world.insert(circle_entity, Transform {
+                position,
+                ..Transform::identity()
+            });
+            world.insert(circle_entity, Shape::Circle { radius: 50.0 });
+            world.insert(circle_entity, Color {
+                r: color.r,
+                g: color.g,
+                b: color.b,
+                a: color.a,
+            });
+            world.insert(circle_entity, Velocity { dx: 0.0, dy: 0.0 });
+            (player.client_id, circle_entity)
+        })
+        .collect()
+}
+
+fn spawn_position(player_index: usize, total_players: usize, window_width: f32, window_height: f32) -> Vec3 {
+    match total_players {
+        1 => Vec3::new(window_width * 0.5, window_height * 0.5, 0.0),
+        2 => {
+            let x = if player_index == 0 {
+                window_width * 0.25
+            } else {
+                window_width * 0.75
+            };
+            Vec3::new(x, window_height * 0.5, 0.0)
+        }
+        _ => {
+            let is_left = player_index % 2 == 0;
+            let is_top = player_index < 2;
+            let x = if is_left { window_width * 0.25 } else { window_width * 0.75 };
+            let y = if is_top { window_height * 0.25 } else { window_height * 0.75 };
+            Vec3::new(x, y, 0.0)
+        }
+    }
+}
+
+fn apply_local_velocity(world: &mut World, entity: Entity, input_state: &InputState) {
+    let move_speed = 220.0;
+    let (move_x, move_y) = input_state.movement_axis();
+    if let Some(velocity) = world.get_mut::<Velocity>(entity) {
+        velocity.dx = move_x * move_speed;
+        velocity.dy = move_y * move_speed;
+    }
+}
+
+fn apply_player_velocity(world: &mut World, player_entities: &[(u64, Entity)], player_id: u64, move_x: f32, move_y: f32) {
+    let move_speed = 220.0;
+    let maybe_entity = player_entities
+        .iter()
+        .find(|(id, _)| *id == player_id)
+        .map(|(_, entity)| *entity);
+
+    if let Some(entity) = maybe_entity {
+        if let Some(velocity) = world.get_mut::<Velocity>(entity) {
+            velocity.dx = move_x * move_speed;
+            velocity.dy = move_y * move_speed;
+        }
+    }
 }
 
 fn apply_multiplayer_tick(
     runtime: &mut MultiplayerRuntime,
     delta: f32,
     world: &mut World,
-    controlled_entity: Entity,
+    local_player_id: u64,
+    player_entities: &[(u64, Entity)],
     input_state: &InputState,
 ) {
     let tick_rate = runtime.session.tick_rate().max(1);
     let tick_dt = 1.0_f32 / tick_rate as f32;
     runtime.tick_accumulator += delta;
 
-    let move_speed = 220.0;
     while runtime.tick_accumulator >= tick_dt {
         runtime.tick_accumulator -= tick_dt;
 
@@ -282,10 +384,7 @@ fn apply_multiplayer_tick(
         };
 
         runtime.session.enqueue_local_input(input);
-        if let Some(velocity) = world.get_mut::<Velocity>(controlled_entity) {
-            velocity.dx = move_x * move_speed;
-            velocity.dy = move_y * move_speed;
-        }
+        apply_player_velocity(world, player_entities, local_player_id, move_x, move_y);
 
         // Transport send/receive and local input staging happen inside `MatchSession::tick`.
         runtime.session.tick();
@@ -294,7 +393,10 @@ fn apply_multiplayer_tick(
                 NetworkEvent::CorrectionReceived { snapshot, .. } => {
                     apply_snapshot(world, &snapshot);
                 }
-                NetworkEvent::HashMismatch { .. } | NetworkEvent::InputReceived { .. } => {}
+                NetworkEvent::InputReceived { player_id, move_x, move_y, .. } => {
+                    apply_player_velocity(world, player_entities, player_id, move_x, move_y);
+                }
+                NetworkEvent::HashMismatch { .. } => {}
             }
         });
     }

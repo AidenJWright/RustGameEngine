@@ -11,6 +11,14 @@ path = "src/lib.rs"
 name = "demo"
 path = "demo/main.rs"
 
+[[bin]]
+name = "game"
+path = "demo/game.rs"
+
+[[bin]]
+name = "editor"
+path = "demo/editor.rs"
+
 [dependencies]
 winit = "0.30"
 wgpu = "25"
@@ -19,3 +27,9 @@ imgui-wgpu = "0.25"
 imgui-winit-support = "0.13"
 bytemuck = { version = "1.14", features = ["derive"] }
 pollster = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[features]
+default = ["platform-windows"]
+platform-windows = []

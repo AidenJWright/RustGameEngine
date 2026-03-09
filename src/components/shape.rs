@@ -1,9 +1,10 @@
 //! Shape component — describes the renderable primitive.
 
+use serde::{Deserialize, Serialize};
 use crate::ecs::component::Component;
 
 /// The geometric shape used for rendering.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Shape {
     /// A filled circle.
     Circle { radius: f32 },

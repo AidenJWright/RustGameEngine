@@ -49,6 +49,26 @@ impl ImguiLayer {
         self.platform.handle_event(self.ctx.io_mut(), window, event);
     }
 
+    /// Forward a `WindowEvent` to imgui (for use with `ApplicationHandler`).
+    pub fn handle_window_event(
+        &mut self,
+        window: &Window,
+        window_id: winit::window::WindowId,
+        event: &winit::event::WindowEvent,
+    ) {
+        let full = winit::event::Event::<()>::WindowEvent { window_id, event: event.clone() };
+        self.platform.handle_event(self.ctx.io_mut(), window, &full);
+    }
+
+    /// Notify imgui that all events for this frame have been processed.
+    pub fn handle_about_to_wait(&mut self, window: &Window) {
+        self.platform.handle_event(
+            self.ctx.io_mut(),
+            window,
+            &winit::event::Event::<()>::AboutToWait,
+        );
+    }
+
     /// Begin an imgui frame and return a mutable UI handle.
     pub fn begin_frame<'a>(&'a mut self, window: &Window) -> &'a mut imgui::Ui {
         self.platform

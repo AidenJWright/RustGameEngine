@@ -11,13 +11,7 @@ use std::net::{SocketAddr, UdpSocket};
 use crate::multiplayer::matchmaking::PlayerInfo;
 
 use super::net_types::{
-    DesyncMode,
-    MatchState,
-    NetworkEvent,
-    NetworkTick,
-    NetworkPolicy,
-    PlayerInputFrame,
-    NetMessage,
+    DesyncMode, MatchState, NetMessage, NetworkEvent, NetworkPolicy, NetworkTick, PlayerInputFrame,
     SyncMode,
 };
 
@@ -51,10 +45,53 @@ pub struct MatchSession {
 
 impl MatchSession {
     /// Start a session from matchmaker state.
-    pub fn new(
+    pub fn new(config: NetworkPolicy, state: MatchState, local_peer_id: u64) -> io::Result<Self> {
+        let expected_local_addr = resolve_local_addr(&state, local_peer_id)?;
+        let socket = UdpSocket::bind(expected_local_addr)?;
+        Self::new_with_socket(config, state, local_peer_id, socket)
+    }
+
+    /// Start a session using a prebound gameplay socket.
+    ///
+    /// The socket's local address must match the endpoint advertised to the matchmaker
+    /// for `local_peer_id`.
+    pub fn new_with_socket(
         config: NetworkPolicy,
         state: MatchState,
         local_peer_id: u64,
+        socket: UdpSocket,
+    ) -> io::Result<Self> {
+        let expected_local_addr = resolve_local_addr(&state, local_peer_id)?;
+        let actual_local_addr = socket.local_addr()?;
+        if actual_local_addr != expected_local_addr {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "prebound gameplay socket addr mismatch: expected {expected_local_addr}, got {actual_local_addr}"
+                ),
+            ));
+        }
+        Self::build_session(config, state, local_peer_id, socket)
+    }
+
+    /// Construct a session with explicit policy using defaults.
+    pub fn with_defaults(state: MatchState, local_peer_id: u64) -> io::Result<Self> {
+        Self::new(
+            NetworkPolicy {
+                sync_mode: SyncMode::InputReplication,
+                desync_mode: DesyncMode::SnapshotCorrections,
+                tick_rate: super::net_types::DEFAULT_TICK_RATE,
+            },
+            state,
+            local_peer_id,
+        )
+    }
+
+    fn build_session(
+        config: NetworkPolicy,
+        state: MatchState,
+        local_peer_id: u64,
+        socket: UdpSocket,
     ) -> io::Result<Self> {
         let role = if local_peer_id == state.host_peer_id {
             MatchRole::Host
@@ -62,16 +99,8 @@ impl MatchSession {
             MatchRole::Client
         };
 
+        let local_addr = socket.local_addr()?;
         let endpoints = resolve_endpoints(&state.players)?;
-        let local_addr = state
-            .players
-            .iter()
-            .find(|player| player.client_id == local_peer_id)
-            .and_then(|player| endpoints.get(&player.client_id).copied())
-            .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::NotFound, "local peer id not in player list")
-            })?;
-
         let host_addr = state
             .players
             .iter()
@@ -81,11 +110,9 @@ impl MatchSession {
                 io::Error::new(io::ErrorKind::NotFound, "host peer id not in player list")
             })?;
 
-        let socket = UdpSocket::bind(local_addr)?;
-
-        socket
-            .set_nonblocking(true)
-            .map_err(|error| io::Error::new(error.kind(), format!("set_nonblocking failed: {error}")))?;
+        socket.set_nonblocking(true).map_err(|error| {
+            io::Error::new(error.kind(), format!("set_nonblocking failed: {error}"))
+        })?;
 
         let peers: Vec<(u64, SocketAddr)> = state
             .players
@@ -94,7 +121,10 @@ impl MatchSession {
                 if player.client_id == local_peer_id {
                     return None;
                 }
-                endpoints.get(&player.client_id).copied().map(|address| (player.client_id, address))
+                endpoints
+                    .get(&player.client_id)
+                    .copied()
+                    .map(|address| (player.client_id, address))
             })
             .collect();
 
@@ -131,19 +161,6 @@ impl MatchSession {
             input_queue: VecDeque::new(),
             event_queue: VecDeque::new(),
         })
-    }
-
-    /// Construct a session with explicit policy using defaults.
-    pub fn with_defaults(state: MatchState, local_peer_id: u64) -> io::Result<Self> {
-        Self::new(
-            NetworkPolicy {
-            sync_mode: SyncMode::InputReplication,
-            desync_mode: DesyncMode::SnapshotCorrections,
-            tick_rate: super::net_types::DEFAULT_TICK_RATE,
-            },
-            state,
-            local_peer_id,
-        )
     }
 
     /// Whether this peer is the host.
@@ -282,22 +299,21 @@ impl MatchSession {
         loop {
             match self.socket.recv_from(&mut buffer) {
                 Ok((size, _from)) => {
-                        if let Ok(message) = decode_message(&buffer[..size]) {
-                            match message {
+                    if let Ok(message) = decode_message(&buffer[..size]) {
+                        match message {
                             NetMessage::Input(frame) => {
                                 if self.is_host() {
                                     self.send_input_to_peers(frame.clone());
                                 }
-                                self.event_queue.push_back(NetworkEvent::InputReceived(frame));
+                                self.event_queue
+                                    .push_back(NetworkEvent::InputReceived(frame));
                             }
                             NetMessage::HostHash { .. } => {
                                 // Reserved for a later phase where we compare local/remote hashes.
                             }
                             NetMessage::HostCorrection { tick, snapshot } => {
-                                self.event_queue.push_back(NetworkEvent::CorrectionReceived {
-                                    tick,
-                                    snapshot,
-                                });
+                                self.event_queue
+                                    .push_back(NetworkEvent::CorrectionReceived { tick, snapshot });
                             }
                         }
                     }
@@ -324,14 +340,28 @@ fn decode_message(bytes: &[u8]) -> io::Result<NetMessage> {
     bincode::deserialize(bytes).map_err(io::Error::other)
 }
 
-fn resolve_endpoints(players: &[PlayerInfo]) -> io::Result<std::collections::HashMap<u64, SocketAddr>> {
+fn resolve_local_addr(state: &MatchState, local_peer_id: u64) -> io::Result<SocketAddr> {
+    let endpoints = resolve_endpoints(&state.players)?;
+    state
+        .players
+        .iter()
+        .find(|player| player.client_id == local_peer_id)
+        .and_then(|player| endpoints.get(&player.client_id).copied())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "local peer id not in player list"))
+}
+
+fn resolve_endpoints(
+    players: &[PlayerInfo],
+) -> io::Result<std::collections::HashMap<u64, SocketAddr>> {
     players
         .iter()
         .map(|player| {
-            let addr = player
-                .game_addr
-                .parse::<SocketAddr>()
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, format!("invalid game_addr '{}': {error}", player.game_addr)))?;
+            let addr = player.game_addr.parse::<SocketAddr>().map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("invalid game_addr '{}': {error}", player.game_addr),
+                )
+            })?;
             Ok((player.client_id, addr))
         })
         .collect()

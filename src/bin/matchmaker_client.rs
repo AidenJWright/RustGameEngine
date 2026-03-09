@@ -7,10 +7,7 @@ use std::time::Duration;
 use clap::{Parser, Subcommand};
 
 use forge_ecs::multiplayer::matchmaking::{
-    deserialize_request,
-    serialize_request,
-    MatchEvent,
-    MatchRequest,
+    deserialize_request, serialize_request, MatchEvent, MatchRequest,
 };
 
 #[derive(Debug, Parser)]
@@ -33,10 +30,15 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Connectivity check for launcher integration.
+    Ping,
+
     /// Create a lobby and become first member.
     Create {
         player_name: String,
         game_addr: String,
+        #[arg(long, default_value_t = 4)]
+        target_players: u8,
     },
 
     /// Join an existing lobby with the provided code.
@@ -55,67 +57,79 @@ enum Command {
     },
 
     /// Request that a lobby starts now (optional; auto-start triggers at threshold).
-    Start {
-        lobby_code: String,
-    },
+    Start { lobby_code: String, client_id: u64 },
 
     /// Leave a lobby explicitly.
-    Leave {
-        lobby_code: String,
-        client_id: u64,
-    },
+    Leave { lobby_code: String, client_id: u64 },
 }
 
 fn main() {
     let args = Cli::parse();
-    let matchmaker_addr: SocketAddr = args.server.parse().expect("server must be a socket address");
+    let matchmaker_addr: SocketAddr = args
+        .server
+        .parse()
+        .expect("server must be a socket address");
 
     let socket = UdpSocket::bind("0.0.0.0:0").expect("failed to bind ephemeral UDP socket");
 
     let (request, expect_reply) = match args.command {
-        Command::Create { player_name, game_addr } => {
-            (
-                MatchRequest::CreateLobby {
-                    player_name,
-                    game_addr,
-                },
-                true,
-            )
-        }
+        Command::Ping => (MatchRequest::Ping, true),
+        Command::Create {
+            player_name,
+            game_addr,
+            target_players,
+        } => (
+            MatchRequest::CreateLobby {
+                player_name,
+                game_addr,
+                target_players,
+            },
+            true,
+        ),
         Command::Join {
             lobby_code,
             player_name,
             game_addr,
-        } => {
-            (
-                MatchRequest::JoinLobby {
-                    lobby_code,
-                    player_name,
-                    game_addr,
-                },
-                true,
-            )
-        }
+        } => (
+            MatchRequest::JoinLobby {
+                lobby_code,
+                player_name,
+                game_addr,
+            },
+            true,
+        ),
         Command::Heartbeat {
             lobby_code,
             client_id,
             game_addr,
-        } => {
-            (
-                MatchRequest::Heartbeat {
-                    lobby_code,
-                    client_id,
-                    game_addr,
-                },
-                false,
-            )
-        }
-        Command::Start { lobby_code } => {
-            (MatchRequest::StartMatch { lobby_code }, false)
-        }
-        Command::Leave { lobby_code, client_id } => {
-            (MatchRequest::LeaveLobby { lobby_code, client_id }, false)
-        }
+        } => (
+            MatchRequest::Heartbeat {
+                lobby_code,
+                client_id,
+                game_addr,
+            },
+            false,
+        ),
+        Command::Start {
+            lobby_code,
+            client_id,
+        } => (
+            MatchRequest::StartMatch {
+                lobby_code,
+                client_id,
+            },
+            false,
+        ),
+        Command::Leave {
+            lobby_code,
+            client_id,
+        } => (
+            MatchRequest::LeaveLobby {
+                lobby_code,
+                client_id,
+            },
+            false,
+        ),
     };
 
     let response = send_match_request(
@@ -166,6 +180,9 @@ fn send_match_request(
 
 fn print_event(event: &MatchEvent) {
     match event {
+        MatchEvent::Pong => {
+            println!("kind=pong");
+        }
         MatchEvent::LobbyCreated {
             lobby_code,
             player_id,
@@ -174,9 +191,11 @@ fn print_event(event: &MatchEvent) {
             println!("kind=lobby_created");
             println!("lobby_code={lobby_code}");
             println!("client_id={player_id}");
+            println!("lobby_started={}", lobby.started,);
+            println!("target_players={}", lobby.target_players);
             println!(
-                "lobby_started={}",
-                lobby.started,
+                "countdown_seconds={}",
+                lobby.countdown_seconds.map_or(0, |seconds| seconds)
             );
             println!("players={}", lobby.players.len());
         }
@@ -188,9 +207,11 @@ fn print_event(event: &MatchEvent) {
             println!("kind=lobby_joined");
             println!("lobby_code={lobby_code}");
             println!("client_id={player_id}");
+            println!("lobby_started={}", lobby.started,);
+            println!("target_players={}", lobby.target_players);
             println!(
-                "lobby_started={}",
-                lobby.started,
+                "countdown_seconds={}",
+                lobby.countdown_seconds.map_or(0, |seconds| seconds)
             );
             println!("players={}", lobby.players.len());
         }
@@ -198,9 +219,11 @@ fn print_event(event: &MatchEvent) {
             println!("kind=lobby_updated");
             println!("lobby_code={lobby_code}");
             println!("host_client_id={}", lobby.host_client_id.map_or(0, |id| id));
+            println!("lobby_started={}", lobby.started,);
+            println!("target_players={}", lobby.target_players);
             println!(
-                "lobby_started={}",
-                lobby.started,
+                "countdown_seconds={}",
+                lobby.countdown_seconds.map_or(0, |seconds| seconds)
             );
             println!("players={}", lobby.players.len());
             for player in &lobby.players {
@@ -234,4 +257,3 @@ fn print_event(event: &MatchEvent) {
         }
     }
 }
-

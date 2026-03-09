@@ -12,13 +12,13 @@ use clap::Parser;
 use rand::Rng;
 
 use forge_ecs::multiplayer::matchmaking::{
-    deserialize_request, send_match_event, MatchEvent, MatchRequest, MAX_PLAYERS,
-    PlayerInfo, LobbyState,
+    deserialize_request, send_match_event, LobbyState, MatchEvent, MatchRequest, PlayerInfo,
+    MAX_PLAYERS,
 };
 
 const MATCHMAKER_TICK_MS: u64 = 125;
 const STALE_CLIENT_SECS: u64 = 45;
-const AUTO_START_AFTER_SECS: u64 = 15;
+const AUTO_START_AFTER_TARGET_SECS: u64 = 5;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -33,7 +33,6 @@ struct Args {
 
 #[derive(Debug)]
 struct LobbyPlayer {
-    id: u64,
     info: PlayerInfo,
     remote_addr: SocketAddr,
     last_seen: Instant,
@@ -43,13 +42,18 @@ struct LobbyPlayer {
 struct Lobby {
     code: String,
     players: HashMap<u64, LobbyPlayer>,
-    created_at: Instant,
     last_activity: Instant,
     started: bool,
     /// Shared deterministic seed used for host election.
     shared_seed: u64,
-    /// Host is fixed by creator unless no longer present at start.
+    /// Host is fixed by creator unless no longer present.
     host_client_id: Option<u64>,
+    /// Desired lobby size including host.
+    target_players: usize,
+    /// Instant when required player threshold was reached.
+    target_reached_at: Option<Instant>,
+    /// Last countdown value broadcast to clients.
+    last_countdown_sent: Option<u64>,
 }
 
 fn main() {
@@ -64,7 +68,7 @@ fn main() {
         .set_read_timeout(Some(Duration::from_millis(MATCHMAKER_TICK_MS)))
         .expect("failed to set matchmaker read timeout");
 
-    println!("Matchmaker listening on {}", bind_addr);
+    println!("Matchmaker listening on {bind_addr}");
 
     let mut lobbies: HashMap<String, Lobby> = HashMap::new();
     let mut next_client_id: u64 = 1;
@@ -72,12 +76,7 @@ fn main() {
     let mut buffer = [0_u8; 65_536];
 
     loop {
-        if let Err(error) = process_tick(
-            &socket,
-            &mut buffer,
-            &mut lobbies,
-            &mut next_client_id,
-        ) {
+        if let Err(error) = process_tick(&socket, &mut buffer, &mut lobbies, &mut next_client_id) {
             match error.kind() {
                 io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => {}
                 _ => eprintln!("matchmaker packet error: {error}"),
@@ -85,9 +84,23 @@ fn main() {
         }
 
         maybe_auto_start_lobbies(&socket, &mut lobbies);
+        broadcast_countdown_updates(&socket, &mut lobbies);
 
         if last_cleanup.elapsed() >= Duration::from_secs(1) {
-            remove_stale_players(&mut lobbies, Duration::from_secs(STALE_CLIENT_SECS));
+            let updated_lobbies =
+                remove_stale_players(&mut lobbies, Duration::from_secs(STALE_CLIENT_SECS));
+            for code in updated_lobbies {
+                if let Some(lobby) = lobbies.get(&code) {
+                    let _ = broadcast_lobby(
+                        &socket,
+                        lobby,
+                        MatchEvent::LobbyUpdated {
+                            lobby_code: code.clone(),
+                            lobby: lobby_state_for(lobby),
+                        },
+                    );
+                }
+            }
             last_cleanup = Instant::now();
         }
     }
@@ -106,96 +119,45 @@ fn process_tick(
     };
 
     match request {
-        MatchRequest::CreateLobby { player_name, game_addr } => {
-            let (lobby_code, player_id, lobby_state) =
-                create_lobby(lobbies, next_client_id, remote_addr, player_name, game_addr);
-            send_match_event(
-                socket,
-                &remote_addr,
-                &MatchEvent::LobbyCreated {
-                    lobby_code: lobby_code.clone(),
-                    player_id,
-                    lobby: lobby_state,
-                },
-            )?;
-            println!(
-                "create-lobby: player_id={player_id} lobby={lobby_code} from={remote_addr}"
-            );
-            if let Some(lobby) = lobbies.get(&lobby_code) {
-                broadcast_lobby(
-                    socket,
-                    lobby,
-                    MatchEvent::LobbyUpdated {
-                        lobby_code,
-                        lobby: lobby_state_for(lobby),
-                    },
-                )?;
-            }
+        MatchRequest::Ping => {
+            send_match_event(socket, &remote_addr, &MatchEvent::Pong)?;
         }
-        MatchRequest::JoinLobby {
-            lobby_code,
+        MatchRequest::CreateLobby {
             player_name,
             game_addr,
+            target_players,
         } => {
-            match join_lobby(
+            match create_lobby(
                 lobbies,
-                &lobby_code,
+                next_client_id,
                 remote_addr,
                 player_name,
                 game_addr,
-                *next_client_id,
+                target_players,
             ) {
-                Ok((player_id, lobby_state)) => {
-                    *next_client_id += 1;
+                Ok((lobby_code, player_id, lobby_state)) => {
                     send_match_event(
                         socket,
                         &remote_addr,
-                        &MatchEvent::LobbyJoined {
+                        &MatchEvent::LobbyCreated {
                             lobby_code: lobby_code.clone(),
                             player_id,
-                            lobby: lobby_state.clone(),
+                            lobby: lobby_state,
                         },
                     )?;
                     println!(
-                        "join-lobby: player_id={player_id} lobby={lobby_code} from={remote_addr}"
+                        "create-lobby: player_id={player_id} lobby={lobby_code} from={remote_addr}"
                     );
                     if let Some(lobby) = lobbies.get(&lobby_code) {
                         broadcast_lobby(
                             socket,
                             lobby,
                             MatchEvent::LobbyUpdated {
-                                lobby_code: lobby_code.clone(),
-                                lobby: lobby_state,
+                                lobby_code,
+                                lobby: lobby_state_for(lobby),
                             },
                         )?;
                     }
-                    maybe_auto_start(socket, lobbies, &lobby_code);
-                }
-                Err(error) => {
-                    send_match_event(
-                        socket,
-                        &remote_addr,
-                        &MatchEvent::Error { message: error.to_string() },
-                    )?;
-                    println!("join-lobby failed from {remote_addr}: {error}");
-                }
-            }
-        }
-        MatchRequest::LeaveLobby { lobby_code, client_id } => {
-            match leave_lobby(lobbies, &lobby_code, client_id) {
-                Ok(None) => {
-                    println!("leave-lobby: player_id={client_id} lobby={lobby_code}");
-                }
-                Ok(Some(mut lobby)) => {
-                    let lobby_state = lobby_state_for(&mut lobby);
-                    broadcast_lobby(
-                        socket,
-                        &lobby,
-                        MatchEvent::LobbyUpdated {
-                            lobby_code: lobby_code.clone(),
-                            lobby: lobby_state,
-                        },
-                    )?;
                 }
                 Err(error) => {
                     send_match_event(
@@ -205,20 +167,105 @@ fn process_tick(
                             message: error.to_string(),
                         },
                     )?;
-                    println!("leave-lobby failed from {remote_addr}: {error}");
-                }
-            }
-            if let Some(lobby) = lobbies.get(&lobby_code) {
-                if lobby.players.is_empty() {
-                    lobbies.remove(&lobby_code);
                 }
             }
         }
-        MatchRequest::StartMatch { lobby_code } => {
-            if maybe_auto_start(socket, lobbies, &lobby_code) {
-                println!("match-start: lobby={lobby_code}");
+        MatchRequest::JoinLobby {
+            lobby_code,
+            player_name,
+            game_addr,
+        } => match join_lobby(
+            lobbies,
+            &lobby_code,
+            remote_addr,
+            player_name,
+            game_addr,
+            *next_client_id,
+        ) {
+            Ok((player_id, lobby_state)) => {
+                *next_client_id += 1;
+                send_match_event(
+                    socket,
+                    &remote_addr,
+                    &MatchEvent::LobbyJoined {
+                        lobby_code: lobby_code.clone(),
+                        player_id,
+                        lobby: lobby_state.clone(),
+                    },
+                )?;
+                println!("join-lobby: player_id={player_id} lobby={lobby_code} from={remote_addr}");
+                if let Some(lobby) = lobbies.get(&lobby_code) {
+                    broadcast_lobby(
+                        socket,
+                        lobby,
+                        MatchEvent::LobbyUpdated {
+                            lobby_code: lobby_code.clone(),
+                            lobby: lobby_state,
+                        },
+                    )?;
+                }
+                maybe_auto_start(socket, lobbies, &lobby_code);
             }
-        }
+            Err(error) => {
+                send_match_event(
+                    socket,
+                    &remote_addr,
+                    &MatchEvent::Error {
+                        message: error.to_string(),
+                    },
+                )?;
+                println!("join-lobby failed from {remote_addr}: {error}");
+            }
+        },
+        MatchRequest::LeaveLobby {
+            lobby_code,
+            client_id,
+        } => match leave_lobby(lobbies, &lobby_code, client_id) {
+            Ok(Some(state)) => {
+                if let Some(lobby) = lobbies.get(&lobby_code) {
+                    broadcast_lobby(
+                        socket,
+                        lobby,
+                        MatchEvent::LobbyUpdated {
+                            lobby_code,
+                            lobby: state,
+                        },
+                    )?;
+                }
+                println!("leave-lobby: player_id={client_id}");
+            }
+            Ok(None) => {
+                println!("leave-lobby: removed empty lobby={lobby_code}");
+            }
+            Err(error) => {
+                send_match_event(
+                    socket,
+                    &remote_addr,
+                    &MatchEvent::Error {
+                        message: error.to_string(),
+                    },
+                )?;
+                println!("leave-lobby failed from {remote_addr}: {error}");
+            }
+        },
+        MatchRequest::StartMatch {
+            lobby_code,
+            client_id,
+        } => match try_start_match_by_requester(socket, lobbies, &lobby_code, client_id) {
+            Ok(true) => {
+                println!("match-start: lobby={lobby_code} by host={client_id}");
+            }
+            Ok(false) => {}
+            Err(error) => {
+                send_match_event(
+                    socket,
+                    &remote_addr,
+                    &MatchEvent::Error {
+                        message: error.to_string(),
+                    },
+                )?;
+            }
+        },
         MatchRequest::Heartbeat {
             lobby_code,
             client_id,
@@ -237,8 +284,11 @@ fn create_lobby(
     remote_addr: SocketAddr,
     player_name: String,
     game_addr: String,
-) -> (String, u64, LobbyState) {
-    let lobby_code = generate_lobby_code();
+    target_players: u8,
+) -> io::Result<(String, u64, LobbyState)> {
+    let target_players = validate_target_players(target_players)?;
+
+    let lobby_code = generate_unique_lobby_code(lobbies);
     let client_id = *next_client_id;
     *next_client_id += 1;
 
@@ -246,7 +296,6 @@ fn create_lobby(
     players.insert(
         client_id,
         LobbyPlayer {
-            id: client_id,
             info: PlayerInfo {
                 client_id,
                 name: player_name,
@@ -258,24 +307,23 @@ fn create_lobby(
     );
 
     let now = Instant::now();
-    let lobby = Lobby {
+    let mut lobby = Lobby {
         code: lobby_code.clone(),
         players,
-        created_at: now,
         last_activity: now,
         started: false,
         shared_seed: rand::thread_rng().gen(),
         host_client_id: Some(client_id),
+        target_players,
+        target_reached_at: None,
+        last_countdown_sent: None,
     };
+    refresh_countdown_state(&mut lobby, now);
 
     let state = lobby_state_for(&lobby);
     lobbies.insert(lobby_code.clone(), lobby);
 
-    (
-        lobby_code.clone(),
-        client_id,
-        state,
-    )
+    Ok((lobby_code, client_id, state))
 }
 
 fn join_lobby(
@@ -292,10 +340,7 @@ fn join_lobby(
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "lobby not found"))?;
 
     if lobby.players.len() >= MAX_PLAYERS {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "lobby is full (max 4 players)",
-        ));
+        return Err(io::Error::other("lobby is full (max 4 players)"));
     }
     if lobby.started {
         return Err(io::Error::new(
@@ -308,7 +353,6 @@ fn join_lobby(
     lobby.players.insert(
         client_id,
         LobbyPlayer {
-            id: client_id,
             info: PlayerInfo {
                 client_id,
                 name: player_name,
@@ -319,33 +363,49 @@ fn join_lobby(
         },
     );
     lobby.last_activity = now;
+    refresh_countdown_state(lobby, now);
 
     let state = lobby_state_for(lobby);
     Ok((client_id, state))
 }
 
-fn leave_lobby<'a>(
-    lobbies: &'a mut HashMap<String, Lobby>,
+fn leave_lobby(
+    lobbies: &mut HashMap<String, Lobby>,
     lobby_code: &str,
     client_id: u64,
-) -> io::Result<Option<&'a mut Lobby>> {
-    let lobby = lobbies
-        .get_mut(lobby_code)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "lobby not found"))?;
+) -> io::Result<Option<LobbyState>> {
+    let now = Instant::now();
+    let mut remove_lobby = false;
+    let state = {
+        let lobby = lobbies
+            .get_mut(lobby_code)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "lobby not found"))?;
 
-    if !lobby.started && lobby.host_client_id == Some(client_id) {
-        lobby.host_client_id = None;
+        if lobby.players.remove(&client_id).is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("player {client_id} not in lobby {lobby_code}"),
+            ));
+        }
+
+        reassign_host_if_needed(lobby);
+        lobby.last_activity = now;
+        refresh_countdown_state(lobby, now);
+
+        if lobby.players.is_empty() {
+            remove_lobby = true;
+            None
+        } else {
+            Some(lobby_state_for(lobby))
+        }
+    };
+
+    if remove_lobby {
+        lobbies.remove(lobby_code);
+        Ok(None)
+    } else {
+        Ok(state)
     }
-
-    if lobby.players.remove(&client_id).is_none() {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("player {client_id} not in lobby {lobby_code}"),
-        ));
-    }
-
-    lobby.last_activity = Instant::now();
-    Ok(Some(lobby))
 }
 
 fn heartbeat_lobby(
@@ -363,16 +423,22 @@ fn heartbeat_lobby(
         .players
         .get_mut(&client_id)
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "player not in lobby"))?;
+
     player.last_seen = now;
     player.remote_addr = remote_addr;
     if let Some(game_addr) = game_addr {
         player.info.game_addr = game_addr;
     }
     lobby.last_activity = now;
+
     Ok(())
 }
 
-fn maybe_auto_start(socket: &UdpSocket, lobbies: &mut HashMap<String, Lobby>, lobby_code: &str) -> bool {
+fn maybe_auto_start(
+    socket: &UdpSocket,
+    lobbies: &mut HashMap<String, Lobby>,
+    lobby_code: &str,
+) -> bool {
     let should_start = lobbies
         .get(lobby_code)
         .map(should_auto_start_lobby)
@@ -402,14 +468,32 @@ fn maybe_auto_start_lobbies(socket: &UdpSocket, lobbies: &mut HashMap<String, Lo
     }
 }
 
+fn try_start_match_by_requester(
+    socket: &UdpSocket,
+    lobbies: &mut HashMap<String, Lobby>,
+    lobby_code: &str,
+    requester_client_id: u64,
+) -> io::Result<bool> {
+    {
+        let lobby = lobbies
+            .get(lobby_code)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "lobby not found"))?;
+        ensure_host_request(lobby, requester_client_id)?;
+    }
+
+    Ok(try_start_match(socket, lobbies, lobby_code))
+}
+
 fn should_auto_start_lobby(lobby: &Lobby) -> bool {
     if lobby.started || lobby.players.is_empty() {
         return false;
     }
 
-    let lobby_is_full = lobby.players.len() >= MAX_PLAYERS;
-    let timeout_elapsed = lobby.created_at.elapsed() >= Duration::from_secs(AUTO_START_AFTER_SECS);
-    lobby_is_full || timeout_elapsed
+    let Some(reached_at) = lobby.target_reached_at else {
+        return false;
+    };
+
+    reached_at.elapsed() >= Duration::from_secs(AUTO_START_AFTER_TARGET_SECS)
 }
 
 fn try_start_match(
@@ -439,26 +523,29 @@ fn try_start_match(
             host
         }
     };
+
     let mut endpoints = lobby_state_for(lobby).players;
     endpoints.sort_by_key(|player| player.client_id);
 
     lobby.started = true;
     lobby.host_client_id = Some(host_client_id);
     lobby.last_activity = Instant::now();
+    lobby.last_countdown_sent = None;
 
     let event = MatchEvent::MatchStart {
         lobby_code: lobby_code.to_string(),
         host_client_id,
         seed: lobby.shared_seed,
-        player_endpoints: endpoints.clone(),
+        player_endpoints: endpoints,
     };
 
     broadcast_lobby(socket, lobby, event).is_ok()
 }
 
-fn remove_stale_players(lobbies: &mut HashMap<String, Lobby>, timeout: Duration) {
+fn remove_stale_players(lobbies: &mut HashMap<String, Lobby>, timeout: Duration) -> Vec<String> {
     let now = Instant::now();
-    let mut stale_codes: Vec<String> = Vec::new();
+    let mut updated_codes: Vec<String> = Vec::new();
+    let mut empty_codes: Vec<String> = Vec::new();
 
     for lobby in lobbies.values_mut() {
         let stale_ids: Vec<u64> = lobby
@@ -473,20 +560,60 @@ fn remove_stale_players(lobbies: &mut HashMap<String, Lobby>, timeout: Duration)
             })
             .collect();
 
+        if stale_ids.is_empty() {
+            continue;
+        }
+
         for stale in stale_ids {
             lobby.players.remove(&stale);
             lobby.last_activity = now;
         }
 
+        reassign_host_if_needed(lobby);
+        refresh_countdown_state(lobby, now);
+
         if lobby.players.is_empty() {
-            stale_codes.push(lobby.code.clone());
+            empty_codes.push(lobby.code.clone());
+        } else {
+            updated_codes.push(lobby.code.clone());
         }
     }
 
-    stale_codes.into_iter().for_each(|code| {
+    for code in empty_codes {
         lobbies.remove(&code);
         println!("removed-stale-lobby {code}");
-    });
+    }
+
+    updated_codes
+}
+
+fn broadcast_countdown_updates(socket: &UdpSocket, lobbies: &mut HashMap<String, Lobby>) {
+    let mut changed_codes: Vec<String> = Vec::new();
+
+    for (code, lobby) in lobbies.iter_mut() {
+        if lobby.started || lobby.players.is_empty() {
+            continue;
+        }
+
+        let remaining = countdown_seconds_remaining(lobby);
+        if remaining != lobby.last_countdown_sent {
+            lobby.last_countdown_sent = remaining;
+            changed_codes.push(code.clone());
+        }
+    }
+
+    for code in changed_codes {
+        if let Some(lobby) = lobbies.get(&code) {
+            let _ = broadcast_lobby(
+                socket,
+                lobby,
+                MatchEvent::LobbyUpdated {
+                    lobby_code: code.clone(),
+                    lobby: lobby_state_for(lobby),
+                },
+            );
+        }
+    }
 }
 
 fn broadcast_lobby(socket: &UdpSocket, lobby: &Lobby, event: MatchEvent) -> io::Result<()> {
@@ -511,6 +638,70 @@ fn lobby_state_for(lobby: &Lobby) -> LobbyState {
             .collect(),
         started: lobby.started,
         host_client_id: lobby.host_client_id,
+        target_players: lobby.target_players as u8,
+        countdown_seconds: countdown_seconds_remaining(lobby),
+    }
+}
+
+fn validate_target_players(target_players: u8) -> io::Result<usize> {
+    let target = target_players as usize;
+    if !(1..=MAX_PLAYERS).contains(&target) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("target_players must be 1..={MAX_PLAYERS}"),
+        ));
+    }
+    Ok(target)
+}
+
+fn refresh_countdown_state(lobby: &mut Lobby, now: Instant) {
+    if lobby.players.len() >= lobby.target_players {
+        if lobby.target_reached_at.is_none() {
+            lobby.target_reached_at = Some(now);
+        }
+    } else {
+        lobby.target_reached_at = None;
+        lobby.last_countdown_sent = None;
+    }
+}
+
+fn countdown_seconds_remaining(lobby: &Lobby) -> Option<u64> {
+    if lobby.started {
+        return None;
+    }
+
+    let reached_at = lobby.target_reached_at?;
+    let elapsed = reached_at.elapsed().as_secs();
+
+    if elapsed >= AUTO_START_AFTER_TARGET_SECS {
+        Some(0)
+    } else {
+        Some(AUTO_START_AFTER_TARGET_SECS - elapsed)
+    }
+}
+
+fn ensure_host_request(lobby: &Lobby, requester_client_id: u64) -> io::Result<()> {
+    match lobby.host_client_id {
+        Some(host_id) if host_id == requester_client_id => Ok(()),
+        Some(_) => Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "only the lobby host can start the match",
+        )),
+        None => Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "lobby has no host assigned",
+        )),
+    }
+}
+
+fn reassign_host_if_needed(lobby: &mut Lobby) {
+    let needs_new_host = match lobby.host_client_id {
+        Some(host_id) => !lobby.players.contains_key(&host_id),
+        None => true,
+    };
+
+    if needs_new_host {
+        lobby.host_client_id = lobby.players.keys().min().copied();
     }
 }
 
@@ -533,29 +724,41 @@ fn splitmix64(mut x: u64) -> u64 {
     x ^ (x >> 31)
 }
 
+fn generate_unique_lobby_code(lobbies: &HashMap<String, Lobby>) -> String {
+    let mut attempts = 0_u32;
+    loop {
+        let code = generate_lobby_code();
+        if !lobbies.contains_key(&code) {
+            return code;
+        }
+        attempts += 1;
+        if attempts > 20_000 {
+            panic!("unable to generate unique 4-digit lobby code");
+        }
+    }
+}
+
 fn generate_lobby_code() -> String {
     let mut rng = rand::thread_rng();
-    let charset: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-    let mut code = String::with_capacity(6);
-    for _ in 0..6 {
-        let idx = rng.gen_range(0..charset.len());
-        code.push(charset[idx] as char);
-    }
-    code
+    format!("{:04}", rng.gen_range(0..10_000))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn test_lobby(player_count: usize, created_ago: Duration, started: bool) -> Lobby {
+    fn test_lobby(
+        player_count: usize,
+        target_players: usize,
+        reached_ago: Option<Duration>,
+        started: bool,
+    ) -> Lobby {
         let now = Instant::now();
         let mut players = HashMap::new();
         for id in 1..=player_count as u64 {
             players.insert(
                 id,
                 LobbyPlayer {
-                    id,
                     info: PlayerInfo {
                         client_id: id,
                         name: format!("P{id}"),
@@ -570,31 +773,57 @@ mod tests {
         }
 
         Lobby {
-            code: "ABC123".to_string(),
+            code: "1234".to_string(),
             players,
-            created_at: now - created_ago,
             last_activity: now,
             started,
             shared_seed: 42,
             host_client_id: Some(1),
+            target_players,
+            target_reached_at: reached_ago.map(|duration| now - duration),
+            last_countdown_sent: None,
         }
     }
 
     #[test]
-    fn does_not_auto_start_with_two_players_before_timeout() {
-        let lobby = test_lobby(2, Duration::from_secs(5), false);
-        assert!(!should_auto_start_lobby(&lobby));
+    fn lobby_code_is_four_digits() {
+        let code = generate_lobby_code();
+        assert_eq!(code.len(), 4);
+        assert!(code.chars().all(|ch| ch.is_ascii_digit()));
     }
 
     #[test]
-    fn auto_starts_when_lobby_is_full() {
-        let lobby = test_lobby(MAX_PLAYERS, Duration::from_secs(1), false);
-        assert!(should_auto_start_lobby(&lobby));
+    fn auto_starts_only_after_target_countdown() {
+        let not_ready = test_lobby(2, 2, Some(Duration::from_secs(4)), false);
+        assert!(!should_auto_start_lobby(&not_ready));
+
+        let ready = test_lobby(
+            2,
+            2,
+            Some(Duration::from_secs(AUTO_START_AFTER_TARGET_SECS)),
+            false,
+        );
+        assert!(should_auto_start_lobby(&ready));
     }
 
     #[test]
-    fn auto_starts_after_timeout_even_if_not_full() {
-        let lobby = test_lobby(2, Duration::from_secs(AUTO_START_AFTER_SECS), false);
-        assert!(should_auto_start_lobby(&lobby));
+    fn countdown_resets_when_target_not_met() {
+        let mut lobby = test_lobby(1, 2, Some(Duration::from_secs(2)), false);
+        lobby.last_countdown_sent = Some(3);
+
+        refresh_countdown_state(&mut lobby, Instant::now());
+
+        assert!(lobby.target_reached_at.is_none());
+        assert!(lobby.last_countdown_sent.is_none());
+        assert_eq!(countdown_seconds_remaining(&lobby), None);
+    }
+
+    #[test]
+    fn non_host_start_is_rejected() {
+        let lobby = test_lobby(2, 2, Some(Duration::from_secs(5)), false);
+        let error = ensure_host_request(&lobby, 2).expect_err("non-host should be rejected");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+
+        ensure_host_request(&lobby, 1).expect("host should be allowed");
     }
 }

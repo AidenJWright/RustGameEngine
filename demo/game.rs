@@ -393,7 +393,8 @@ fn apply_multiplayer_tick(
                 NetworkEvent::CorrectionReceived { snapshot, .. } => {
                     apply_snapshot(world, &snapshot);
                 }
-                NetworkEvent::InputReceived { player_id, move_x, move_y, .. } => {
+                NetworkEvent::InputReceived(input) => {
+                    let InputFrame { player_id, move_x, move_y, .. } = input;
                     apply_player_velocity(world, player_entities, player_id, move_x, move_y);
                 }
                 NetworkEvent::HashMismatch { .. } => {}

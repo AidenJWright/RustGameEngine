@@ -25,4 +25,5 @@ pub mod ecs;
 pub mod math;
 pub mod platform;
 pub mod renderer;
+pub mod multiplayer;
 pub mod systems;

@@ -57,6 +57,18 @@ The **"Entity Colors"** imgui window (top-left) lets you:
 
 ---
 
+## Running a local matchmaker + two clients
+
+# terminal 1
+cargo run --bin matchmaker -- --bind 127.0.0.1:7000
+
+# terminal 2 (create lobby)
+cargo run --bin matchmaker_client -- create "Player1" "127.0.0.1:7001"
+
+# terminal 3 (join lobby using code from output above)
+cargo run --bin matchmaker_client -- join "<LOBBY_CODE>" "Player2" "127.0.0.1:7002"
+
+
 ## How to add a new Component
 
 1. Create a plain `struct` or `enum` in `src/components/<name>.rs` deriving

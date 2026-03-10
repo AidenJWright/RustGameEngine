@@ -23,12 +23,7 @@ impl ImguiLayer {
     ///
     /// `format` must match the main surface attachment format so the imgui
     /// render pass writes to the correct attachment.
-    pub fn new(
-        window: &Window,
-        device: &Device,
-        queue: &Queue,
-        format: TextureFormat,
-    ) -> Self {
+    pub fn new(window: &Window, device: &Device, queue: &Queue, format: TextureFormat) -> Self {
         let mut ctx = Context::create();
         ctx.set_ini_filename(None); // disable imgui.ini persistence
 
@@ -41,7 +36,11 @@ impl ImguiLayer {
         };
         let renderer = Renderer::new(&mut ctx, device, queue, renderer_config);
 
-        Self { ctx, platform, renderer }
+        Self {
+            ctx,
+            platform,
+            renderer,
+        }
     }
 
     /// Forward an OS event to imgui's winit platform glue.
@@ -56,7 +55,10 @@ impl ImguiLayer {
         window_id: winit::window::WindowId,
         event: &winit::event::WindowEvent,
     ) {
-        let full = winit::event::Event::<()>::WindowEvent { window_id, event: event.clone() };
+        let full = winit::event::Event::<()>::WindowEvent {
+            window_id,
+            event: event.clone(),
+        };
         self.platform.handle_event(self.ctx.io_mut(), window, &full);
     }
 

@@ -86,7 +86,9 @@ impl CommandBuffer {
         let commands: Vec<_> = self.commands.drain(..).collect();
         commands.into_iter().for_each(|cmd| match cmd {
             Command::Spawn(init) => init(world),
-            Command::Despawn(e) => { world.despawn(e); }
+            Command::Despawn(e) => {
+                world.despawn(e);
+            }
             Command::InsertComponent { applier, .. } => applier(world),
             Command::RemoveComponent { remover, .. } => remover(world),
         });

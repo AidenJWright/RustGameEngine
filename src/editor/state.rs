@@ -1,7 +1,7 @@
 //! Editor runtime state — selection, camera, scene file path, status messages.
 
-use crate::ecs::entity::Entity;
 use super::camera::Camera2D;
+use crate::ecs::entity::Entity;
 
 /// Mutable editor runtime state passed between frames.
 pub struct EditorState {

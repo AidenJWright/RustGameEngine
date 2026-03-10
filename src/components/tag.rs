@@ -1,7 +1,7 @@
 //! Tag component — a string label for an entity.
 
-use serde::{Deserialize, Serialize};
 use crate::ecs::component::Component;
+use serde::{Deserialize, Serialize};
 
 /// A human-readable label for an entity (e.g. `"player"`, `"scene_root"`).
 ///

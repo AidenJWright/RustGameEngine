@@ -75,7 +75,11 @@ impl<T: Component> ComponentStorage<T> {
     /// Remove the component for `entity`. Returns `true` if it existed.
     pub fn remove(&mut self, entity: Entity) -> bool {
         if let Some(slot) = self.data.get_mut(entity.index as usize) {
-            if slot.as_ref().map(|(g, _)| *g == entity.generation).unwrap_or(false) {
+            if slot
+                .as_ref()
+                .map(|(g, _)| *g == entity.generation)
+                .unwrap_or(false)
+            {
                 *slot = None;
                 return true;
             }
@@ -104,18 +108,16 @@ impl<T: Component> ComponentStorage<T> {
     /// Iterate over all live `(Entity, &T)` pairs.
     pub fn iter(&self) -> impl Iterator<Item = (Entity, &T)> {
         self.data.iter().enumerate().filter_map(|(idx, slot)| {
-            slot.as_ref().map(|(gen, comp)| {
-                (Entity::new(idx as u32, *gen), comp)
-            })
+            slot.as_ref()
+                .map(|(gen, comp)| (Entity::new(idx as u32, *gen), comp))
         })
     }
 
     /// Iterate over all live `(Entity, &mut T)` pairs.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (Entity, &mut T)> {
         self.data.iter_mut().enumerate().filter_map(|(idx, slot)| {
-            slot.as_mut().map(|(gen, comp)| {
-                (Entity::new(idx as u32, *gen), comp)
-            })
+            slot.as_mut()
+                .map(|(gen, comp)| (Entity::new(idx as u32, *gen), comp))
         })
     }
 

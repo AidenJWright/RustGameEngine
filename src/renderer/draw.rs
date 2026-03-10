@@ -1,6 +1,9 @@
 //! Draw command queue — accumulates commands per frame, flushes sorted by pipeline.
 
-use wgpu::{CommandEncoder, LoadOp, Operations, RenderPassColorAttachment, RenderPassDescriptor, StoreOp, TextureView};
+use wgpu::{
+    CommandEncoder, LoadOp, Operations, RenderPassColorAttachment, RenderPassDescriptor, StoreOp,
+    TextureView,
+};
 
 use super::context::RenderContext;
 use super::pipeline::{CirclePipeline, RectPipeline, Uniforms};
@@ -102,7 +105,13 @@ impl DrawQueue {
         self.commands
             .iter()
             .filter_map(|c| {
-                if let DrawCommand::Circle { x, y, radius, color } = c {
+                if let DrawCommand::Circle {
+                    x,
+                    y,
+                    radius,
+                    color,
+                } = c
+                {
                     Some((*x, *y, *radius, *color))
                 } else {
                     None
@@ -122,15 +131,19 @@ impl DrawQueue {
                     usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 });
-                context.queue.write_buffer(&uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
-                let bind_group = context.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("circle draw bind group"),
-                    layout: &circle_pipeline.bind_group_layout,
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: uniform_buffer.as_entire_binding(),
-                    }],
-                });
+                context
+                    .queue
+                    .write_buffer(&uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+                let bind_group = context
+                    .device
+                    .create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("circle draw bind group"),
+                        layout: &circle_pipeline.bind_group_layout,
+                        entries: &[wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: uniform_buffer.as_entire_binding(),
+                        }],
+                    });
 
                 // Use a per-command bind group/buffer so each draw sees its own
                 // transform/size/color pair, avoiding last-write overwrite.
@@ -143,7 +156,14 @@ impl DrawQueue {
         self.commands
             .iter()
             .filter_map(|c| {
-                if let DrawCommand::Rect { x, y, width: w, height: h, color } = c {
+                if let DrawCommand::Rect {
+                    x,
+                    y,
+                    width: w,
+                    height: h,
+                    color,
+                } = c
+                {
                     Some((*x, *y, *w, *h, *color))
                 } else {
                     None
@@ -163,15 +183,19 @@ impl DrawQueue {
                     usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 });
-                context.queue.write_buffer(&uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
-                let bind_group = context.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("rect draw bind group"),
-                    layout: &rect_pipeline.bind_group_layout,
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: uniform_buffer.as_entire_binding(),
-                    }],
-                });
+                context
+                    .queue
+                    .write_buffer(&uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+                let bind_group = context
+                    .device
+                    .create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("rect draw bind group"),
+                        layout: &rect_pipeline.bind_group_layout,
+                        entries: &[wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: uniform_buffer.as_entire_binding(),
+                        }],
+                    });
                 pass.set_pipeline(&rect_pipeline.pipeline);
                 pass.set_bind_group(0, &bind_group, &[]);
                 pass.draw(0..4, 0..1);

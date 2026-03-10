@@ -1,7 +1,7 @@
 //! RGBA color component — plain data, no methods.
 
-use serde::{Deserialize, Serialize};
 use crate::ecs::component::Component;
+use serde::{Deserialize, Serialize};
 
 /// Linear RGBA color with components in `[0.0, 1.0]`.
 #[derive(Debug, Clone, Serialize, Deserialize)]

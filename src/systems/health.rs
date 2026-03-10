@@ -5,10 +5,10 @@
 //! 2. `filter` to keep only those with `current <= 0.0`.
 //! 3. `for_each` to queue a `CommandBuffer::despawn` for each.
 
+use crate::components::Health;
 use crate::ecs::command_buffer::CommandBuffer;
 use crate::ecs::system::System;
 use crate::ecs::world::World;
-use crate::components::Health;
 
 /// Despawns any entity whose `Health::current` is ≤ 0.
 #[derive(Debug, Default)]

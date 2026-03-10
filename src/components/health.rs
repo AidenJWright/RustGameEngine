@@ -1,7 +1,7 @@
 //! Health component.
 
-use serde::{Deserialize, Serialize};
 use crate::ecs::component::Component;
+use serde::{Deserialize, Serialize};
 
 /// Current and maximum hit-points.
 #[derive(Debug, Clone, Serialize, Deserialize)]

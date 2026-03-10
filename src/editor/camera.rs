@@ -17,7 +17,10 @@ pub struct Camera2D {
 
 impl Default for Camera2D {
     fn default() -> Self {
-        Self { position: Vec2::ZERO, zoom: 1.0 }
+        Self {
+            position: Vec2::ZERO,
+            zoom: 1.0,
+        }
     }
 }
 
@@ -38,16 +41,27 @@ impl Camera2D {
         _viewport_h: f32,
     ) -> DrawCommand {
         match cmd {
-            DrawCommand::Circle { x, y, radius, color } => DrawCommand::Circle {
-                x:      (x - self.position.x) * self.zoom,
-                y:      (y - self.position.y) * self.zoom,
+            DrawCommand::Circle {
+                x,
+                y,
+                radius,
+                color,
+            } => DrawCommand::Circle {
+                x: (x - self.position.x) * self.zoom,
+                y: (y - self.position.y) * self.zoom,
                 radius: radius * self.zoom,
                 color,
             },
-            DrawCommand::Rect { x, y, width, height, color } => DrawCommand::Rect {
-                x:      (x - self.position.x) * self.zoom,
-                y:      (y - self.position.y) * self.zoom,
-                width:  width  * self.zoom,
+            DrawCommand::Rect {
+                x,
+                y,
+                width,
+                height,
+                color,
+            } => DrawCommand::Rect {
+                x: (x - self.position.x) * self.zoom,
+                y: (y - self.position.y) * self.zoom,
+                width: width * self.zoom,
                 height: height * self.zoom,
                 color,
             },

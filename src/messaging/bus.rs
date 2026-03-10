@@ -1,9 +1,9 @@
 //! Message bus — routes loop-phase messages to registered systems.
 
+use super::message::LoopPhase;
 use crate::ecs::command_buffer::CommandBuffer;
 use crate::ecs::system::System;
 use crate::ecs::world::World;
-use super::message::LoopPhase;
 
 struct Registration {
     phase: LoopPhase,
@@ -32,11 +32,16 @@ impl MessageBus {
     /// Lower priority numbers run first.  Registrations are unsorted until
     /// [`run_frame`](Self::run_frame) is called.
     pub fn register(&mut self, phase: LoopPhase, priority: i32, system: impl System + 'static) {
-        self.handlers.push(Registration { phase, priority, system: Box::new(system) });
+        self.handlers.push(Registration {
+            phase,
+            priority,
+            system: Box::new(system),
+        });
     }
 
     fn dispatch_phase(&self, phase: &LoopPhase, world: &World, commands: &mut CommandBuffer) {
-        let mut indices: Vec<usize> = self.handlers
+        let mut indices: Vec<usize> = self
+            .handlers
             .iter()
             .enumerate()
             .filter(|(_, h)| &h.phase == phase)

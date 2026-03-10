@@ -13,13 +13,13 @@ use crate::renderer::{CirclePipeline, RectPipeline};
 /// Both [`super::game_runner::GameRunner`] and
 /// [`super::editor_runner::EditorRunner`] operate on an `AppCore`.
 pub struct AppCore {
-    pub world:           World,
-    pub platform:        WinitPlatform,
-    pub render_ctx:      RenderContext,
+    pub world: World,
+    pub platform: WinitPlatform,
+    pub render_ctx: RenderContext,
     pub circle_pipeline: CirclePipeline,
-    pub rect_pipeline:   RectPipeline,
-    pub draw_queue:      DrawQueue,
-    pub imgui:           ImguiLayer,
+    pub rect_pipeline: RectPipeline,
+    pub draw_queue: DrawQueue,
+    pub imgui: ImguiLayer,
 }
 
 impl AppCore {
@@ -36,7 +36,7 @@ impl AppCore {
         let render_ctx = RenderContext::new(platform.window(), w, h)?;
 
         let circle_pipeline = CirclePipeline::new(&render_ctx.device, render_ctx.surface_format);
-        let rect_pipeline   = RectPipeline::new(&render_ctx.device, render_ctx.surface_format);
+        let rect_pipeline = RectPipeline::new(&render_ctx.device, render_ctx.surface_format);
         let draw_queue = DrawQueue::new();
 
         let imgui = ImguiLayer::new(
@@ -50,6 +50,14 @@ impl AppCore {
         world.insert_resource(DeltaTime(0.0));
         world.insert_resource(ElapsedTime(0.0));
 
-        Ok(Self { world, platform, render_ctx, circle_pipeline, rect_pipeline, draw_queue, imgui })
+        Ok(Self {
+            world,
+            platform,
+            render_ctx,
+            circle_pipeline,
+            rect_pipeline,
+            draw_queue,
+            imgui,
+        })
     }
 }

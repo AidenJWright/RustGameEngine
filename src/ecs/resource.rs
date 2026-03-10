@@ -31,16 +31,12 @@ impl Resources {
 
     /// Get an immutable reference to resource `T`, or `None` if absent.
     pub fn get<T: Resource>(&self) -> Option<&T> {
-        self.map
-            .get(&TypeId::of::<T>())?
-            .downcast_ref::<T>()
+        self.map.get(&TypeId::of::<T>())?.downcast_ref::<T>()
     }
 
     /// Get a mutable reference to resource `T`, or `None` if absent.
     pub fn get_mut<T: Resource>(&mut self) -> Option<&mut T> {
-        self.map
-            .get_mut(&TypeId::of::<T>())?
-            .downcast_mut::<T>()
+        self.map.get_mut(&TypeId::of::<T>())?.downcast_mut::<T>()
     }
 
     /// Remove and return resource `T`.

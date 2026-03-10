@@ -6,11 +6,11 @@
 //! 3. For each, compute the new position = old + velocity * dt.
 //! 4. Queue `CommandBuffer::insert` with the updated `Transform`.
 
+use crate::components::{Transform, Velocity};
 use crate::ecs::command_buffer::CommandBuffer;
 use crate::ecs::resource::DeltaTime;
 use crate::ecs::system::System;
 use crate::ecs::world::World;
-use crate::components::{Transform, Velocity};
 use crate::math::Vec3;
 
 /// Applies linear velocity to entity positions every frame.

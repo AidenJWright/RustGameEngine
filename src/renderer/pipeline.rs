@@ -173,7 +173,12 @@ impl CirclePipeline {
             }],
         });
 
-        Self { pipeline, bind_group_layout, uniform_buffer, bind_group }
+        Self {
+            pipeline,
+            bind_group_layout,
+            uniform_buffer,
+            bind_group,
+        }
     }
 
     /// Upload new uniforms and return the bind group to set before drawing.
@@ -308,7 +313,12 @@ impl RectPipeline {
             }],
         });
 
-        Self { pipeline, bind_group_layout, uniform_buffer, bind_group }
+        Self {
+            pipeline,
+            bind_group_layout,
+            uniform_buffer,
+            bind_group,
+        }
     }
 
     /// Upload new uniforms before drawing.

@@ -111,9 +111,7 @@ impl World {
     /// Implemented by collecting the smaller entity set then filtering by presence
     /// in the other store — straightforward intersection without extra allocations
     /// when the sets are small.
-    pub fn query2<A: Component, B: Component>(
-        &self,
-    ) -> impl Iterator<Item = (Entity, &A, &B)> {
+    pub fn query2<A: Component, B: Component>(&self) -> impl Iterator<Item = (Entity, &A, &B)> {
         // Collect entity set for A, then filter to those that also have B.
         let a_store = self.registry.storage_ref::<A>();
         let b_store = self.registry.storage_ref::<B>();

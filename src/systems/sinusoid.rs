@@ -7,13 +7,13 @@
 //!    `y = base_y + amplitude * sin(frequency * elapsed + phase)`.
 //! 4. Queue `CommandBuffer::insert` with the updated transform.
 
-use serde::{Deserialize, Serialize};
+use crate::components::Transform;
 use crate::ecs::command_buffer::CommandBuffer;
 use crate::ecs::component::Component;
 use crate::ecs::resource::ElapsedTime;
 use crate::ecs::system::System;
 use crate::ecs::world::World;
-use crate::components::Transform;
+use serde::{Deserialize, Serialize};
 
 /// Data component that drives sinusoidal Y motion.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,8 +49,8 @@ impl System for SinusoidSystem {
             .query2::<Transform, SinusoidComponent>()
             .map(|(entity, transform, sinusoid)| {
                 // y = base_y + amplitude * sin(freq * t + phase)
-                let new_y =
-                    sinusoid.base_y + sinusoid.amplitude * (sinusoid.frequency * elapsed + sinusoid.phase).sin();
+                let new_y = sinusoid.base_y
+                    + sinusoid.amplitude * (sinusoid.frequency * elapsed + sinusoid.phase).sin();
                 let new_transform = Transform {
                     position: crate::math::Vec3::new(
                         transform.position.x,

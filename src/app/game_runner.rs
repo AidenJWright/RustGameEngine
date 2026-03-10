@@ -32,7 +32,10 @@ pub struct GameRunner {
 impl GameRunner {
     /// Create a runner with an empty message bus.
     pub fn new() -> Self {
-        Self { bus: MessageBus::new(), last_time: Instant::now() }
+        Self {
+            bus: MessageBus::new(),
+            last_time: Instant::now(),
+        }
     }
 
     /// Create the event loop, build the window inside `resumed`, and block
@@ -60,41 +63,60 @@ impl GameRunner {
 
     fn update(&mut self, core: &mut AppCore) {
         let now = Instant::now();
-        let dt  = now.duration_since(self.last_time).as_secs_f32();
+        let dt = now.duration_since(self.last_time).as_secs_f32();
         self.last_time = now;
 
-        if let Some(r) = core.world.resource_mut::<DeltaTime>()  { r.0  = dt; }
-        if let Some(r) = core.world.resource_mut::<ElapsedTime>() { r.0 += dt; }
+        if let Some(r) = core.world.resource_mut::<DeltaTime>() {
+            r.0 = dt;
+        }
+        if let Some(r) = core.world.resource_mut::<ElapsedTime>() {
+            r.0 += dt;
+        }
 
         self.bus.run_frame(&mut core.world);
     }
 
     fn render(&mut self, core: &mut AppCore) {
+        core.render_ctx.sync_with_window(core.platform.window());
+
         // Queue scene draw commands (world-space → screen-space with top-left origin).
-        core.world.query3::<Transform, Shape, Color>()
+        core.world
+            .query3::<Transform, Shape, Color>()
             .for_each(|(_, transform, shape, color)| {
                 let cmd = make_draw_cmd(transform, shape, color);
                 core.draw_queue.push(cmd);
             });
 
-        let Some((surface_texture, view)) = core.render_ctx.begin_frame() else { return; };
-        let mut encoder = core.render_ctx.device.create_command_encoder(
-            &wgpu::CommandEncoderDescriptor { label: Some("game frame") },
-        );
+        let Some((surface_texture, view)) = core.render_ctx.begin_frame() else {
+            return;
+        };
+        let mut encoder =
+            core.render_ctx
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("game frame"),
+                });
 
         core.draw_queue.flush(
-            &core.render_ctx, &view, &mut encoder,
-            &core.circle_pipeline, &core.rect_pipeline,
+            &core.render_ctx,
+            &view,
+            &mut encoder,
+            &core.circle_pipeline,
+            &core.rect_pipeline,
             [0.10, 0.10, 0.10, 1.0],
         );
 
-        core.render_ctx.queue.submit(std::iter::once(encoder.finish()));
+        core.render_ctx
+            .queue
+            .submit(std::iter::once(encoder.finish()));
         core.render_ctx.end_frame(surface_texture);
     }
 }
 
 impl Default for GameRunner {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -103,23 +125,29 @@ impl Default for GameRunner {
 
 struct GameHandle {
     runner: GameRunner,
-    setup:  Option<Box<dyn FnOnce(&mut World)>>,
-    title:  String,
-    width:  u32,
+    setup: Option<Box<dyn FnOnce(&mut World)>>,
+    title: String,
+    width: u32,
     height: u32,
-    core:   Option<AppCore>,
+    core: Option<AppCore>,
 }
 
 impl ApplicationHandler for GameHandle {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.core.is_some() { return; }
+        if self.core.is_some() {
+            return;
+        }
         let attrs = WindowAttributes::default()
             .with_title(&self.title)
             .with_inner_size(PhysicalSize::new(self.width, self.height))
             .with_resizable(true);
-        let window: Window = event_loop.create_window(attrs).expect("window creation failed");
+        let window: Window = event_loop
+            .create_window(attrs)
+            .expect("window creation failed");
         let mut core = AppCore::from_window(window).expect("AppCore creation failed");
-        if let Some(setup) = self.setup.take() { setup(&mut core.world); }
+        if let Some(setup) = self.setup.take() {
+            setup(&mut core.world);
+        }
         self.core = Some(core);
     }
 
@@ -136,21 +164,32 @@ impl ApplicationHandler for GameHandle {
         window_id: WindowId,
         event: WindowEvent,
     ) {
-        let Some(core) = &mut self.core else { return; };
-        if window_id != core.platform.window.id() { return; }
+        let Some(core) = &mut self.core else {
+            return;
+        };
+        if window_id != core.platform.window.id() {
+            return;
+        }
 
-        core.imgui.handle_window_event(core.platform.window(), window_id, &event);
+        core.imgui
+            .handle_window_event(core.platform.window(), window_id, &event);
 
         match &event {
-            WindowEvent::CloseRequested         => event_loop.exit(),
-            WindowEvent::Resized(s)             => core.render_ctx.resize(s.width, s.height),
-            WindowEvent::RedrawRequested        => self.runner.render(core),
-            _                                   => {}
+            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::Resized(s) => core.render_ctx.resize(s.width, s.height),
+            WindowEvent::ScaleFactorChanged { .. } => {
+                let size = core.platform.window.inner_size();
+                core.render_ctx.resize(size.width, size.height);
+            }
+            WindowEvent::RedrawRequested => self.runner.render(core),
+            _ => {}
         }
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        let Some(core) = &mut self.core else { return; };
+        let Some(core) = &mut self.core else {
+            return;
+        };
         core.imgui.handle_about_to_wait(core.platform.window());
         self.runner.update(core);
         core.platform.window.request_redraw();
@@ -162,22 +201,18 @@ impl ApplicationHandler for GameHandle {
 // ---------------------------------------------------------------------------
 
 /// Convert a `(Transform, Shape, Color)` triple to a screen-space `DrawCommand`.
-pub(crate) fn make_draw_cmd(
-    transform: &Transform,
-    shape: &Shape,
-    color: &Color,
-) -> DrawCommand {
+pub(crate) fn make_draw_cmd(transform: &Transform, shape: &Shape, color: &Color) -> DrawCommand {
     match shape {
         Shape::Circle { radius } => DrawCommand::Circle {
-            x:      transform.position.x,
-            y:      transform.position.y,
+            x: transform.position.x,
+            y: transform.position.y,
             radius: *radius,
             color: [color.r, color.g, color.b, color.a],
         },
         Shape::Rect { width, height } => DrawCommand::Rect {
-            x:      transform.position.x,
-            y:      transform.position.y,
-            width:  *width,
+            x: transform.position.x,
+            y: transform.position.y,
+            width: *width,
             height: *height,
             color: [color.r, color.g, color.b, color.a],
         },

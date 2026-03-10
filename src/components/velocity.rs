@@ -1,7 +1,7 @@
 //! Velocity component — 2D movement per second.
 
-use serde::{Deserialize, Serialize};
 use crate::ecs::component::Component;
+use serde::{Deserialize, Serialize};
 
 /// Linear velocity in world units per second.
 #[derive(Debug, Clone, Serialize, Deserialize)]

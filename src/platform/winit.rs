@@ -175,9 +175,10 @@ pub fn map_window_event(event: &WindowEvent) -> Option<PlatformEvent> {
         }
 
         // Cursor position.
-        WindowEvent::CursorMoved { position, .. } => {
-            Some(PlatformEvent::MouseMoved { x: position.x, y: position.y })
-        }
+        WindowEvent::CursorMoved { position, .. } => Some(PlatformEvent::MouseMoved {
+            x: position.x,
+            y: position.y,
+        }),
 
         // Mouse buttons.
         WindowEvent::MouseInput { button, state, .. } => Some(PlatformEvent::MouseButton {

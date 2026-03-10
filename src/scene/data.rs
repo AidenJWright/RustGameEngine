@@ -78,7 +78,10 @@ pub fn save_scene(world: &World, path: &str) -> std::io::Result<()> {
         });
     }
 
-    let scene = SceneData { version: 1, entities };
+    let scene = SceneData {
+        version: 1,
+        entities,
+    };
     let json = serde_json::to_string_pretty(&scene)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
     std::fs::write(path, json)
@@ -115,13 +118,27 @@ pub fn load_scene(world: &mut World, path: &str) -> std::io::Result<()> {
         };
         id_map.insert(data.id, entity);
 
-        if let Some(c) = data.tag.clone()       { world.insert(entity, c); }
-        if let Some(c) = data.transform.clone() { world.insert(entity, c); }
-        if let Some(c) = data.color.clone()     { world.insert(entity, c); }
-        if let Some(c) = data.shape.clone()     { world.insert(entity, c); }
-        if let Some(c) = data.velocity.clone()  { world.insert(entity, c); }
-        if let Some(c) = data.health.clone()    { world.insert(entity, c); }
-        if let Some(c) = data.sinusoid.clone()  { world.insert(entity, c); }
+        if let Some(c) = data.tag.clone() {
+            world.insert(entity, c);
+        }
+        if let Some(c) = data.transform.clone() {
+            world.insert(entity, c);
+        }
+        if let Some(c) = data.color.clone() {
+            world.insert(entity, c);
+        }
+        if let Some(c) = data.shape.clone() {
+            world.insert(entity, c);
+        }
+        if let Some(c) = data.velocity.clone() {
+            world.insert(entity, c);
+        }
+        if let Some(c) = data.health.clone() {
+            world.insert(entity, c);
+        }
+        if let Some(c) = data.sinusoid.clone() {
+            world.insert(entity, c);
+        }
     }
 
     Ok(())

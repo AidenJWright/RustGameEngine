@@ -1,11 +1,11 @@
 //! wgpu render context — device, queue, surface, and frame lifecycle.
 
 use wgpu::{
-    Adapter, Backends, Device, DeviceDescriptor, Features, Instance, InstanceDescriptor,
-    Limits, MemoryHints, PowerPreference, Queue, RequestAdapterOptions, Surface,
-    SurfaceConfiguration, SurfaceTexture, TextureFormat, TextureUsages, TextureView,
-    TextureViewDescriptor,
+    Adapter, Backends, Device, DeviceDescriptor, Features, Instance, InstanceDescriptor, Limits,
+    MemoryHints, PowerPreference, Queue, RequestAdapterOptions, Surface, SurfaceConfiguration,
+    SurfaceTexture, TextureFormat, TextureUsages, TextureView, TextureViewDescriptor,
 };
+use winit::window::Window;
 
 /// Encapsulates the wgpu instance, adapter, device, queue, and surface.
 ///
@@ -51,15 +51,13 @@ impl RenderContext {
         .map_err(|e| format!("no suitable wgpu adapter: {e}"))?;
 
         // wgpu 25: request_device takes only DeviceDescriptor (no trace path argument).
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &DeviceDescriptor {
-                label: Some("forge_ecs device"),
-                required_features: Features::empty(),
-                required_limits: Limits::default(),
-                memory_hints: MemoryHints::default(),
-                trace: wgpu::Trace::Off,
-            },
-        ))?;
+        let (device, queue) = pollster::block_on(adapter.request_device(&DeviceDescriptor {
+            label: Some("forge_ecs device"),
+            required_features: Features::empty(),
+            required_limits: Limits::default(),
+            memory_hints: MemoryHints::default(),
+            trace: wgpu::Trace::Off,
+        }))?;
 
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps
@@ -102,12 +100,28 @@ impl RenderContext {
         self.surface.configure(&self.device, &self.surface_config);
     }
 
+    /// Ensure the surface configuration matches the window's current physical size.
+    ///
+    /// Some platforms deliver redraw before resize during fullscreen / DPI changes.
+    /// Syncing here prevents rendering against stale surface dimensions.
+    pub fn sync_with_window(&mut self, window: &Window) {
+        let size = window.inner_size();
+        if size.width == 0 || size.height == 0 {
+            return;
+        }
+        if size.width != self.surface_config.width || size.height != self.surface_config.height {
+            self.resize(size.width, size.height);
+        }
+    }
+
     /// Acquire the next frame texture and create a view for rendering.
     ///
     /// Returns `None` when the surface is lost (e.g. window minimised on some platforms).
     pub fn begin_frame(&self) -> Option<(SurfaceTexture, TextureView)> {
         let texture = self.surface.get_current_texture().ok()?;
-        let view = texture.texture.create_view(&TextureViewDescriptor::default());
+        let view = texture
+            .texture
+            .create_view(&TextureViewDescriptor::default());
         Some((texture, view))
     }
 

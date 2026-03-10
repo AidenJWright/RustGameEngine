@@ -1,7 +1,7 @@
 //! 3-component float vector.
 
-use std::ops::{Add, Mul, Neg, Sub};
 use serde::{Deserialize, Serialize};
+use std::ops::{Add, Mul, Neg, Sub};
 
 /// A 3D vector with `f32` components.
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]

@@ -1,7 +1,7 @@
 //! Shape component — describes the renderable primitive.
 
-use serde::{Deserialize, Serialize};
 use crate::ecs::component::Component;
+use serde::{Deserialize, Serialize};
 
 /// The geometric shape used for rendering.
 #[derive(Debug, Clone, Serialize, Deserialize)]

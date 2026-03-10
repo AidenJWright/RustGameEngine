@@ -63,7 +63,10 @@ impl EntityAllocator {
             let index = self.next_index;
             self.next_index += 1;
             self.generations.push(0);
-            Entity { index, generation: 0 }
+            Entity {
+                index,
+                generation: 0,
+            }
         }
     }
 

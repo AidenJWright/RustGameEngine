@@ -1,8 +1,8 @@
 //! `Transform` component — position, rotation, scale in 3D.
 
-use serde::{Deserialize, Serialize};
-use super::vec3::Vec3;
 use super::mat4::Mat4;
+use super::vec3::Vec3;
+use serde::{Deserialize, Serialize};
 
 /// Spatial transform: position (Vec3), rotation around Z (radians), scale (Vec3).
 ///

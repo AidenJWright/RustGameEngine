@@ -103,7 +103,7 @@ impl ApplicationHandler for DemoApp {
             amplitude: 150.0,
             frequency: 1.0,
             phase: 0.0,
-            base_y: 0.0,
+            base_y: 300.0,
         });
 
         let rect_entity = world.spawn_child(scene_root);
@@ -114,10 +114,10 @@ impl ApplicationHandler for DemoApp {
         world.insert(rect_entity, Shape::Rect { width: 100.0, height: 100.0 });
         world.insert(rect_entity, Color { r: 0.2, g: 0.6, b: 1.0, a: 1.0 });
         world.insert(rect_entity, SinusoidComponent {
-            amplitude: 150.0,
+            amplitude: 200.0,
             frequency: 1.0,
             phase: PI / 2.0,
-            base_y: 0.0,
+            base_y: 400.0,
         });
 
         // Scene tree assertions + print

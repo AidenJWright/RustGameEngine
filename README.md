@@ -11,58 +11,21 @@ with a wgpu renderer, winit windowing, and an imgui debug UI.
 
 ```mermaid
 flowchart LR
-    subgraph CLIENT_A["Game peer A (demo/game.rs)"]
-        A_UI["Launcher UI"]
-        A_CTRL["Control UDP socket"]
-    end
-
-    subgraph CLIENT_B["Game peer B (demo/game.rs)"]
-        B_UI["Launcher UI"]
-        B_CTRL["Control UDP socket"]
-    end
-
-    MM["Matchmaker (src/bin/matchmaker.rs)"]
-    MATCH_STATE["MatchState\n(host_peer_id, shared_seed, player_endpoints)"]
-    HOST["Host MatchSession"]
-    CLIENTS["Client MatchSession(s)"]
-
-    A_UI -->|"Ping/Create/Join/Heartbeat/Start"| A_CTRL
-    B_UI -->|"Ping/Create/Join/Heartbeat/Start"| B_CTRL
-    A_CTRL -->|"MatchRequest (UDP)"| MM
-    B_CTRL -->|"MatchRequest (UDP)"| MM
-    MM -->|"MatchEvent: LobbyCreated / LobbyJoined / LobbyUpdated / MatchStart"| A_CTRL
-    MM -->|"MatchEvent: LobbyCreated / LobbyJoined / LobbyUpdated / MatchStart"| B_CTRL
-    A_CTRL -->|"On MatchStart"| MATCH_STATE
-    B_CTRL -->|"On MatchStart"| MATCH_STATE
-    MATCH_STATE -->|"local_peer_id == host_peer_id"| HOST
-    MATCH_STATE -->|"local_peer_id != host_peer_id"| CLIENTS
-    CLIENTS -->|"NetMessage::Input"| HOST
-    HOST -->|"Replicated NetMessage::Input"| CLIENTS
-    HOST -->|"NetMessage::HostCorrection / HostHash"| CLIENTS
+    PEERS["Game peers (players)"] -->|"Create/Join lobby"| MM["Matchmaker"]
+    MM -->|"MatchStart + endpoints"| HOST["Host peer"]
+    MM -->|"MatchStart + endpoints"| CLIENT["Client peer(s)"]
+    CLIENT -->|"Input"| HOST
+    HOST -->|"Replicated state / corrections"| CLIENT
 ```
 
 ### 2) ECS update model and graphics rendering path
 
 ```mermaid
 flowchart TD
-    EV["winit EventLoop / ApplicationHandler"] --> UPD["about_to_wait"]
-    EV --> RD["WindowEvent::RedrawRequested"]
-
-    UPD --> RES["World resources: DeltaTime, ElapsedTime"]
-    RES --> MP["Optional multiplayer tick\nInputFrame -> MatchSession::tick -> NetworkEvent"]
-    RES --> BUS["MessageBus::run_frame\nFirst -> Update -> Last"]
-    BUS --> CB["CommandBuffer flush after each phase"]
-    CB --> WORLD["World\n(entities + components + SceneTree + resources)"]
-    MP --> WORLD
-
-    WORLD --> Q["query3<Transform, Shape, Color>"]
-    Q --> DQ["DrawQueue::push(DrawCommand)"]
-
-    RD --> BF["RenderContext::begin_frame"]
-    BF --> FLUSH["DrawQueue::flush\nscene pass (circles + rects)"]
-    DQ --> FLUSH
-    FLUSH --> UI["Optional imgui pass\n(launcher/editor overlays)"]
-    UI --> SUBMIT["wgpu queue.submit + end_frame"]
+    LOOP["Event loop"] --> UPDATE["Update systems\n(ECS + optional multiplayer tick)"]
+    UPDATE --> WORLD["World state"]
+    WORLD --> DRAW["Build draw commands"]
+    DRAW --> RENDER["Render frame (wgpu + optional imgui)"]
 ```
 
 ---

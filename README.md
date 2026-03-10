@@ -22,7 +22,7 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    LOOP["Event loop"] --> UPDATE["Update systems\n(ECS + optional multiplayer tick)"]
+    LOOP["Event loop"] --> UPDATE["Update systems"]
     UPDATE --> WORLD["World state"]
     WORLD --> DRAW["Build draw commands"]
     DRAW --> RENDER["Render frame (wgpu + optional imgui)"]

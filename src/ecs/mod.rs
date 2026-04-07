@@ -11,7 +11,7 @@ pub mod world;
 pub use command_buffer::CommandBuffer;
 pub use component::{Component, ComponentRegistry, ComponentStorage};
 pub use entity::{Entity, EntityAllocator};
-pub use resource::{DeltaTime, ElapsedTime, Resource, Resources};
+pub use resource::{DeltaTime, ElapsedTime, KeysPressed, Resource, Resources};
 pub use scene_tree::SceneTree;
 #[allow(deprecated)]
 pub use system::{FnSystem, Scheduler, System};

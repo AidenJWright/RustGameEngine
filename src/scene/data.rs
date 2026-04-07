@@ -4,7 +4,10 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::components::{Camera, Color, Health, Shape, SinusoidComponent, Tag, Transform, Velocity};
+use crate::components::{
+    Camera, Color, Health, PlayerInput, Shape, SinusoidComponent, SpawnPoints, Tag, Transform,
+    Velocity,
+};
 use crate::ecs::entity::Entity;
 use crate::ecs::world::World;
 
@@ -40,6 +43,10 @@ pub struct EntityData {
     pub sinusoid: Option<SinusoidComponent>,
     /// Camera is saved/loaded but excluded from network snapshots.
     pub camera: Option<Camera>,
+    /// Configurable player-input key bindings.
+    pub player_input: Option<PlayerInput>,
+    /// Spawn-point registry — one entity per scene holds a list of positions.
+    pub spawn_points: Option<SpawnPoints>,
 }
 
 /// Top-level scene file format.
@@ -76,6 +83,8 @@ pub fn save_scene(world: &World, path: &str) -> std::io::Result<()> {
                 health: world.get::<Health>(entity).cloned(),
                 sinusoid: world.get::<SinusoidComponent>(entity).cloned(),
                 camera: world.get::<Camera>(entity).cloned(),
+                player_input: world.get::<PlayerInput>(entity).cloned(),
+                spawn_points: world.get::<SpawnPoints>(entity).cloned(),
             });
         });
     }
@@ -165,6 +174,12 @@ pub fn load_scene(world: &mut World, path: &str) -> std::io::Result<()> {
             world.insert(entity, c);
         }
         if let Some(c) = data.camera.clone() {
+            world.insert(entity, c);
+        }
+        if let Some(c) = data.player_input.clone() {
+            world.insert(entity, c);
+        }
+        if let Some(c) = data.spawn_points.clone() {
             world.insert(entity, c);
         }
     }

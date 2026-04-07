@@ -10,7 +10,6 @@
 #![warn(clippy::all, clippy::pedantic)]
 #![allow(clippy::too_many_lines)]
 
-use std::collections::HashSet;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
@@ -23,10 +22,10 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowAttributes, WindowId};
 
 use forge_ecs::app::AppCore;
-use forge_ecs::components::{Color, Shape, Tag, Transform, Velocity};
+use forge_ecs::components::{Camera, Color, PlayerInput, Shape, SpawnPoints, Tag, Transform, Velocity};
 use forge_ecs::scene::reload_scene;
 use forge_ecs::ecs::entity::Entity;
-use forge_ecs::ecs::resource::{DeltaTime, ElapsedTime};
+use forge_ecs::ecs::resource::{DeltaTime, ElapsedTime, KeysPressed};
 use forge_ecs::ecs::world::World;
 use forge_ecs::math::Vec3;
 use forge_ecs::messaging::{LoopPhase, MessageBus};
@@ -38,7 +37,7 @@ use forge_ecs::multiplayer::{
 };
 use forge_ecs::platform::{map_window_event, KeyCode, PlatformEvent};
 use forge_ecs::renderer::draw::DrawCommand;
-use forge_ecs::systems::{MovementSystem, SinusoidSystem};
+use forge_ecs::systems::{MovementSystem, PlayerInputSystem, SinusoidSystem};
 
 const DEFAULT_GAMEPLAY_PORT: u16 = 7001;
 
@@ -88,41 +87,60 @@ enum Mode {
     },
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct InputState {
-    left: bool,
-    right: bool,
-    up: bool,
-    down: bool,
+/// Map engine `KeyCode` to the discriminant used by `PlayerInput` and `KeysPressed`.
+///
+/// Discriminants must match `forge_ecs::systems::player_input::config_key_discriminant`.
+fn key_discriminant(code: KeyCode) -> Option<u32> {
+    match code {
+        KeyCode::Left => Some(0),
+        KeyCode::Right => Some(1),
+        KeyCode::Up => Some(2),
+        KeyCode::Down => Some(3),
+        KeyCode::W => Some(4),
+        KeyCode::A => Some(5),
+        KeyCode::S => Some(6),
+        KeyCode::D => Some(7),
+        KeyCode::Space => Some(8),
+        _ => None,
+    }
 }
 
-impl InputState {
-    fn movement_axis(&self) -> (f32, f32) {
-        let x = (if self.left { -1.0_f32 } else { 0.0_f32 })
-            + (if self.right { 1.0_f32 } else { 0.0_f32 });
-        let y = (if self.up { -1.0_f32 } else { 0.0_f32 })
-            + (if self.down { 1.0_f32 } else { 0.0_f32 });
+/// Compute normalised (move_x, move_y) from a player entity's `PlayerInput`
+/// bindings and the current `KeysPressed` resource.
+fn compute_movement(keys: &KeysPressed, pi: &PlayerInput) -> (f32, f32) {
+    use forge_ecs::systems::player_input::config_key_discriminant;
+    let neg_h = keys.is_held(config_key_discriminant(pi.horizontal.negative));
+    let pos_h = keys.is_held(config_key_discriminant(pi.horizontal.positive));
+    let neg_v = keys.is_held(config_key_discriminant(pi.vertical.negative));
+    let pos_v = keys.is_held(config_key_discriminant(pi.vertical.positive));
 
-        let len = (x * x + y * y).sqrt();
-        if (len > 1.0_f32) && len > 0.0 {
-            (x / len, y / len)
-        } else {
-            (x, y)
-        }
+    let raw_x = (if pos_h { 1.0_f32 } else { 0.0 }) - (if neg_h { 1.0_f32 } else { 0.0 });
+    let raw_y = (if pos_v { 1.0_f32 } else { 0.0 }) - (if neg_v { 1.0_f32 } else { 0.0 });
+
+    let len = (raw_x * raw_x + raw_y * raw_y).sqrt();
+    if len > 1.0 {
+        (raw_x / len, raw_y / len)
+    } else {
+        (raw_x, raw_y)
     }
+}
 
-    fn apply(&mut self, event: PlatformEvent) {
-        match event {
-            PlatformEvent::KeyPressed(KeyCode::Left) => self.left = true,
-            PlatformEvent::KeyReleased(KeyCode::Left) => self.left = false,
-            PlatformEvent::KeyPressed(KeyCode::Right) => self.right = true,
-            PlatformEvent::KeyReleased(KeyCode::Right) => self.right = false,
-            PlatformEvent::KeyPressed(KeyCode::Up) => self.up = true,
-            PlatformEvent::KeyReleased(KeyCode::Up) => self.up = false,
-            PlatformEvent::KeyPressed(KeyCode::Down) => self.down = true,
-            PlatformEvent::KeyReleased(KeyCode::Down) => self.down = false,
-            _ => {}
-        }
+/// Compute normalised (move_x, move_y) using default arrow-key bindings.
+/// Used when the player entity has no `PlayerInput` component.
+fn compute_movement_default(keys: &KeysPressed) -> (f32, f32) {
+    let left = keys.is_held(0);
+    let right = keys.is_held(1);
+    let up = keys.is_held(2);
+    let down = keys.is_held(3);
+
+    let raw_x = (if right { 1.0_f32 } else { 0.0 }) - (if left { 1.0_f32 } else { 0.0 });
+    let raw_y = (if down { 1.0_f32 } else { 0.0 }) - (if up { 1.0_f32 } else { 0.0 });
+
+    let len = (raw_x * raw_x + raw_y * raw_y).sqrt();
+    if len > 1.0 {
+        (raw_x / len, raw_y / len)
+    } else {
+        (raw_x, raw_y)
     }
 }
 
@@ -595,7 +613,7 @@ impl LauncherRuntime {
     }
 
     fn check_pending_timeout(&mut self) {
-        const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+        const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
         let Some(pending) = self.pending_request else {
             return;
@@ -663,10 +681,11 @@ struct DemoState {
     player_entities: Vec<(u64, Entity)>,
     player_slots: Vec<(u64, usize)>,
     local_player_id: u64,
-    input_state: InputState,
     multiplayer: Option<MultiplayerRuntime>,
     launcher: Option<LauncherRuntime>,
     scene_initialized: bool,
+    /// Camera entity that tracks the local player's position.
+    camera_entity: Option<Entity>,
 }
 
 enum StartupMode {
@@ -700,6 +719,7 @@ impl ApplicationHandler for GameApp {
         let core = AppCore::from_window(window).expect("AppCore creation failed");
 
         let mut bus = MessageBus::new();
+        bus.register(LoopPhase::Update, PlayerInputSystem::PRIORITY, PlayerInputSystem);
         bus.register(LoopPhase::Update, 0, SinusoidSystem);
         bus.register(LoopPhase::Update, 10, MovementSystem);
 
@@ -715,10 +735,10 @@ impl ApplicationHandler for GameApp {
             player_entities: Vec::new(),
             player_slots: Vec::new(),
             local_player_id: 0,
-            input_state: InputState::default(),
             multiplayer: None,
             launcher: None,
             scene_initialized: false,
+            camera_entity: None,
         };
 
         match startup {
@@ -773,38 +793,38 @@ impl ApplicationHandler for GameApp {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
                 s.core.render_ctx.resize(size.width, size.height);
-                // Only reposition in multiplayer — single-player entities should
-                // keep their positions across window resizes.
-                if s.scene_initialized && s.multiplayer.is_some() {
-                    reposition_players(
-                        &mut s.core.world,
-                        &s.player_entities,
-                        &s.player_slots,
-                        size.width as f32,
-                        size.height as f32,
-                    );
-                }
+                // Do NOT reposition entities — the camera tracks the player,
+                // so the viewport adjusts automatically on resize.
             }
             WindowEvent::ScaleFactorChanged { .. } => {
                 let size = s.core.platform.window.inner_size();
                 s.core.render_ctx.resize(size.width, size.height);
-                if s.scene_initialized && s.multiplayer.is_some() {
-                    reposition_players(
-                        &mut s.core.world,
-                        &s.player_entities,
-                        &s.player_slots,
-                        size.width as f32,
-                        size.height as f32,
-                    );
-                }
             }
             WindowEvent::RedrawRequested => render(s),
             _ => {}
         }
 
+        // Update the KeysPressed resource from raw keyboard events.
+        // This drives both PlayerInputSystem and the multiplayer InputFrame.
         if s.launcher.is_none() {
             if let Some(platform_event) = map_window_event(&event) {
-                s.input_state.apply(platform_event);
+                match platform_event {
+                    PlatformEvent::KeyPressed(code) => {
+                        if let Some(disc) = key_discriminant(code) {
+                            if let Some(keys) = s.core.world.resource_mut::<KeysPressed>() {
+                                keys.press(disc);
+                            }
+                        }
+                    }
+                    PlatformEvent::KeyReleased(code) => {
+                        if let Some(disc) = key_discriminant(code) {
+                            if let Some(keys) = s.core.world.resource_mut::<KeysPressed>() {
+                                keys.release(disc);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
     }
@@ -845,19 +865,27 @@ impl ApplicationHandler for GameApp {
                     &mut s.core.world,
                     s.local_player_id,
                     &s.player_entities,
-                    &s.input_state,
                 );
-            } else if let Some(entity) = s.player_entities.iter().find_map(|(id, entity)| {
-                if *id == s.local_player_id {
-                    Some(*entity)
-                } else {
-                    None
-                }
-            }) {
-                apply_local_velocity(&mut s.core.world, entity, &s.input_state);
             }
+            // Single-player movement is handled by PlayerInputSystem via bus.
 
             s.bus.run_frame(&mut s.core.world);
+
+            // Move camera to follow the local player each frame.
+            if let Some(cam_entity) = s.camera_entity {
+                let player_pos = s
+                    .player_entities
+                    .iter()
+                    .find(|(id, _)| *id == s.local_player_id)
+                    .and_then(|(_, entity)| s.core.world.get::<Transform>(*entity).cloned())
+                    .map(|tf| tf.position);
+
+                if let Some(pos) = player_pos {
+                    if let Some(cam_tf) = s.core.world.get_mut::<Transform>(cam_entity) {
+                        cam_tf.position = pos;
+                    }
+                }
+            }
         }
 
         s.core.platform.window.request_redraw();
@@ -924,13 +952,14 @@ fn resolve_or_default_game_addr(
 }
 
 fn initialize_single_player_scene(state: &mut DemoState) {
-    // Try to load the shared scene file; fall back to a hardcoded default if
-    // the file is missing so the game is always playable.
+    // Load scene.json; fall back to a generated default if missing.
     if let Err(e) = reload_scene(&mut state.core.world, "scene.json") {
         println!("scene.json not found or invalid ({e}), spawning default player");
-        let (window_width, window_height) = current_viewport(&state.core);
-        setup_single_player_scene(&mut state.core.world, window_width, window_height);
+        setup_single_player_scene(&mut state.core.world);
     }
+
+    // Insert KeysPressed resource so PlayerInputSystem can function.
+    state.core.world.insert_resource(KeysPressed::default());
 
     // Find the player entity by Tag "player"; fall back to any entity with Velocity.
     let player_entity = state
@@ -939,14 +968,7 @@ fn initialize_single_player_scene(state: &mut DemoState) {
         .query::<Tag>()
         .find(|(_, tag)| tag.as_str() == "player")
         .map(|(e, _)| e)
-        .or_else(|| {
-            state
-                .core
-                .world
-                .query::<Velocity>()
-                .next()
-                .map(|(e, _)| e)
-        });
+        .or_else(|| state.core.world.query::<Velocity>().next().map(|(e, _)| e));
 
     let local_player_id = 1_u64;
     let player_entities: Vec<(u64, Entity)> = player_entity
@@ -963,6 +985,9 @@ fn initialize_single_player_scene(state: &mut DemoState) {
     state.multiplayer = None;
     state.scene_initialized = true;
 
+    // Find or create camera entity to follow the local player.
+    state.camera_entity = find_or_create_camera(&mut state.core.world);
+
     let _ = state
         .core
         .platform
@@ -971,10 +996,67 @@ fn initialize_single_player_scene(state: &mut DemoState) {
 }
 
 fn initialize_multiplayer_scene(state: &mut DemoState, session: MatchSession) {
-    let (window_width, window_height) = current_viewport(&state.core);
-    let player_entities =
-        setup_multiplayer_scene(&mut state.core.world, &session, window_width, window_height);
+    // Load the shared editor scene first.
+    if let Err(e) = reload_scene(&mut state.core.world, "scene.json") {
+        println!("scene.json not found ({e}), using generated layout");
+    }
+
     let local_player_id = session.local_peer_id();
+    let mut players = session.players().to_vec();
+    players.sort_by_key(|p| p.client_id);
+
+    // Find SpawnPoints entity in the loaded scene.
+    let spawn_positions: Vec<Vec3> = state
+        .core
+        .world
+        .query::<SpawnPoints>()
+        .next()
+        .map(|(_, sp)| {
+            sp.positions
+                .iter()
+                .map(|p| Vec3::new(p[0], p[1], p[2]))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Check capacity — warn if scene doesn't have enough spawn points.
+    if !spawn_positions.is_empty() && players.len() > spawn_positions.len() {
+        println!(
+            "warning: {} players but only {} spawn points — extra players will share last slot",
+            players.len(),
+            spawn_positions.len()
+        );
+    }
+
+    // Insert KeysPressed so PlayerInputSystem works.
+    state.core.world.insert_resource(KeysPressed::default());
+
+    // Spawn a player entity for each peer at the corresponding spawn position.
+    let player_entities: Vec<(u64, Entity)> = players
+        .iter()
+        .enumerate()
+        .map(|(i, player)| {
+            let position = if !spawn_positions.is_empty() {
+                spawn_positions[i.min(spawn_positions.len() - 1)]
+            } else {
+                // Fallback: evenly distributed horizontal layout at world origin.
+                let offset = (i as f32 - (players.len() as f32 - 1.0) * 0.5) * 200.0;
+                Vec3::new(offset, 0.0, 0.0)
+            };
+            let color = PLAYER_COLORS[i % PLAYER_COLORS.len()];
+            let entity = state.core.world.spawn();
+            state.core.world.insert(entity, Transform { position, ..Transform::identity() });
+            state.core.world.insert(entity, Shape::Circle { radius: 50.0 });
+            state.core.world.insert(
+                entity,
+                Color { r: color.r, g: color.g, b: color.b, a: color.a },
+            );
+            state.core.world.insert(entity, Velocity { dx: 0.0, dy: 0.0 });
+            state.core.world.insert(entity, Tag::new(&player.name));
+            state.core.world.insert(entity, PlayerInput::default());
+            (player.client_id, entity)
+        })
+        .collect();
 
     state.player_slots = player_entities
         .iter()
@@ -1000,11 +1082,9 @@ fn initialize_multiplayer_scene(state: &mut DemoState, session: MatchSession) {
     });
     state.scene_initialized = true;
 
-    let is_host = state
-        .multiplayer
-        .as_ref()
-        .map(|runtime| runtime.session.is_host())
-        .unwrap_or(false);
+    // Find or create camera entity to follow the local player.
+    state.camera_entity = find_or_create_camera(&mut state.core.world);
+
     let _ = state.core.platform.window.set_title(&format!(
         "Forge ECS -- Game [peer {} {}]",
         local_player_id,
@@ -1012,19 +1092,19 @@ fn initialize_multiplayer_scene(state: &mut DemoState, session: MatchSession) {
     ));
 }
 
-fn current_viewport(core: &AppCore) -> (f32, f32) {
-    let width = if core.render_ctx.surface_config.width == 0 {
-        1280.0
-    } else {
-        core.render_ctx.surface_config.width as f32
-    };
-    let height = if core.render_ctx.surface_config.height == 0 {
-        720.0
-    } else {
-        core.render_ctx.surface_config.height as f32
-    };
-    (width, height)
+/// Find an existing Camera entity in the world, or spawn a new one.
+fn find_or_create_camera(world: &mut World) -> Option<Entity> {
+    // Prefer an existing Camera entity placed in the scene by the editor.
+    if let Some((entity, _)) = world.query::<Camera>().next() {
+        return Some(entity);
+    }
+    // No camera in scene — create one so the game can render.
+    let cam_entity = world.spawn();
+    world.insert(cam_entity, Transform::identity());
+    world.insert(cam_entity, Camera::new());
+    Some(cam_entity)
 }
+
 
 fn draw_launcher_ui(ui: &imgui::Ui, launcher: &mut LauncherRuntime) {
     ui.window("Multiplayer Launcher")
@@ -1176,164 +1256,25 @@ fn draw_launcher_ui(ui: &imgui::Ui, launcher: &mut LauncherRuntime) {
         });
 }
 
-fn reposition_players(
-    world: &mut World,
-    player_entities: &[(u64, Entity)],
-    player_slots: &[(u64, usize)],
-    window_width: f32,
-    window_height: f32,
-) {
-    let player_count = player_entities.len().min(4);
-    player_slots.iter().for_each(|(peer_id, slot)| {
-        let entity =
-            player_entities
-                .iter()
-                .find_map(|(id, entity)| if id == peer_id { Some(*entity) } else { None });
-        if let Some(entity) = entity {
-            if let Some(transform) = world.get_mut::<Transform>(entity) {
-                transform.position =
-                    spawn_position(*slot, player_count, window_width, window_height);
-            }
-        }
-    });
-}
 
-fn setup_single_player_scene(
-    world: &mut World,
-    window_width: f32,
-    window_height: f32,
-) -> (Vec<(u64, Entity)>, u64) {
+/// Spawn a minimal fallback player entity when `scene.json` is missing.
+fn setup_single_player_scene(world: &mut World) {
     let scene_root = world.spawn();
     world.insert(scene_root, Tag::new("scene_root"));
 
     let color = PLAYER_COLORS[0];
-    let position = spawn_position(0, 1, window_width, window_height);
     let circle_entity = world.spawn_child(scene_root);
-    world.insert(
-        circle_entity,
-        Transform {
-            position,
-            ..Transform::identity()
-        },
-    );
+    world.insert(circle_entity, Transform::identity());
+    world.insert(circle_entity, Tag::new("player"));
     world.insert(circle_entity, Shape::Circle { radius: 50.0 });
     world.insert(
         circle_entity,
-        Color {
-            r: color.r,
-            g: color.g,
-            b: color.b,
-            a: color.a,
-        },
+        Color { r: color.r, g: color.g, b: color.b, a: color.a },
     );
     world.insert(circle_entity, Velocity { dx: 0.0, dy: 0.0 });
-
-    (vec![(1, circle_entity)], 1)
+    world.insert(circle_entity, PlayerInput::default());
 }
 
-fn setup_multiplayer_scene(
-    world: &mut World,
-    session: &MatchSession,
-    window_width: f32,
-    window_height: f32,
-) -> Vec<(u64, Entity)> {
-    let scene_root = world.spawn();
-    world.insert(scene_root, Tag::new("scene_root"));
-
-    let mut players = session.players().to_vec();
-    players.sort_by_key(|player| player.client_id);
-    let player_count = players.len().min(4);
-
-    let player_entities: Vec<(u64, Entity)> = players
-        .iter()
-        .take(player_count)
-        .enumerate()
-        .map(|(index, player)| {
-            let position = spawn_position(index, player_count, window_width, window_height);
-            let color = PLAYER_COLORS[index % PLAYER_COLORS.len()];
-            let circle_entity = world.spawn_child(scene_root);
-            world.insert(
-                circle_entity,
-                Transform {
-                    position,
-                    ..Transform::identity()
-                },
-            );
-            world.insert(circle_entity, Shape::Circle { radius: 50.0 });
-            world.insert(
-                circle_entity,
-                Color {
-                    r: color.r,
-                    g: color.g,
-                    b: color.b,
-                    a: color.a,
-                },
-            );
-            world.insert(circle_entity, Velocity { dx: 0.0, dy: 0.0 });
-            (player.client_id, circle_entity)
-        })
-        .collect();
-
-    let unique_entity_count = player_entities
-        .iter()
-        .map(|(_, entity)| *entity)
-        .collect::<HashSet<_>>()
-        .len();
-    if unique_entity_count != player_entities.len() {
-        println!(
-            "warning: duplicated entity IDs in multiplayer spawn ({:?})",
-            player_entities
-                .iter()
-                .map(|(_, entity)| format!("{entity:?}"))
-                .collect::<Vec<_>>()
-        );
-    }
-
-    player_entities
-}
-
-fn spawn_position(
-    player_index: usize,
-    total_players: usize,
-    window_width: f32,
-    window_height: f32,
-) -> Vec3 {
-    match total_players {
-        1 => Vec3::new(window_width * 0.5, window_height * 0.5, 0.0),
-        2 => {
-            let x = if player_index == 0 {
-                window_width * 0.25
-            } else {
-                window_width * 0.75
-            };
-            Vec3::new(x, window_height * 0.5, 0.0)
-        }
-        _ => {
-            let is_left = player_index % 2 == 0;
-            let is_top = player_index < 2;
-            let x = if is_left {
-                window_width * 0.25
-            } else {
-                window_width * 0.75
-            };
-            let y = if is_top {
-                window_height * 0.25
-            } else {
-                window_height * 0.75
-            };
-            Vec3::new(x, y, 0.0)
-        }
-    }
-}
-
-fn apply_local_velocity(world: &mut World, entity: Entity, input_state: &InputState) {
-    let move_speed = 220.0;
-    let (move_x, move_y) = input_state.movement_axis();
-    if let Some(velocity) = world.get_mut::<Velocity>(entity) {
-        velocity.dx = move_x * move_speed;
-        velocity.dy = move_y * move_speed;
-    }
-}
 
 fn apply_player_velocity(
     world: &mut World,
@@ -1341,7 +1282,7 @@ fn apply_player_velocity(
     player_id: u64,
     move_x: f32,
     move_y: f32,
-) -> bool {
+) {
     let move_speed = 220.0;
     let maybe_entity = player_entities
         .iter()
@@ -1352,10 +1293,8 @@ fn apply_player_velocity(
         if let Some(velocity) = world.get_mut::<Velocity>(entity) {
             velocity.dx = move_x * move_speed;
             velocity.dy = move_y * move_speed;
-            return true;
         }
     }
-    false
 }
 
 fn apply_multiplayer_tick(
@@ -1364,7 +1303,6 @@ fn apply_multiplayer_tick(
     world: &mut World,
     local_player_id: u64,
     player_entities: &[(u64, Entity)],
-    input_state: &InputState,
 ) {
     let tick_rate = runtime.session.tick_rate().max(1);
     let tick_dt = 1.0_f32 / tick_rate as f32;
@@ -1373,7 +1311,23 @@ fn apply_multiplayer_tick(
     while runtime.tick_accumulator >= tick_dt {
         runtime.tick_accumulator -= tick_dt;
 
-        let (move_x, move_y) = input_state.movement_axis();
+        // Compute movement from the local player's PlayerInput bindings + held keys.
+        let (move_x, move_y) = {
+            let keys = world.resource::<KeysPressed>().cloned().unwrap_or_default();
+            let local_entity = player_entities
+                .iter()
+                .find(|(id, _)| *id == local_player_id)
+                .map(|(_, e)| *e);
+            if let Some(entity) = local_entity {
+                if let Some(pi) = world.get::<PlayerInput>(entity).cloned() {
+                    compute_movement(&keys, &pi)
+                } else {
+                    compute_movement_default(&keys)
+                }
+            } else {
+                compute_movement_default(&keys)
+            }
+        };
         let input = InputFrame {
             tick: runtime.session.current_tick(),
             player_id: runtime.session.local_peer_id(),
@@ -1383,7 +1337,8 @@ fn apply_multiplayer_tick(
         };
 
         runtime.session.enqueue_local_input(input);
-        let _ = apply_player_velocity(world, player_entities, local_player_id, move_x, move_y);
+        // Apply local prediction immediately (dead reckoning).
+        apply_player_velocity(world, player_entities, local_player_id, move_x, move_y);
 
         runtime.session.tick();
         let current_tick = runtime.session.current_tick();
@@ -1400,14 +1355,8 @@ fn apply_multiplayer_tick(
                     apply_snapshot(world, &snapshot);
                 }
                 NetworkEvent::InputReceived(input) => {
-                    let InputFrame {
-                        player_id,
-                        move_x,
-                        move_y,
-                        ..
-                    } = input;
-                    let _ =
-                        apply_player_velocity(world, player_entities, player_id, move_x, move_y);
+                    let InputFrame { player_id, move_x, move_y, .. } = input;
+                    apply_player_velocity(world, player_entities, player_id, move_x, move_y);
                 }
                 NetworkEvent::HashMismatch { .. } => {}
                 NetworkEvent::HostHashReceived { tick, host_hash } => {
@@ -1456,12 +1405,25 @@ fn render(s: &mut DemoState) {
             });
 
     if s.scene_initialized {
-        s.core.world.query3::<Transform, Shape, Color>().for_each(
-            |(_, transform, shape, color)| {
-                let cmd = make_draw_cmd(&transform, shape, color);
-                s.core.draw_queue.push(cmd);
-            },
-        );
+        // Only render when a Camera exists — no camera = intentional black screen.
+        let camera = s
+            .core
+            .world
+            .query2::<Camera, Transform>()
+            .next()
+            .map(|(_, cam, tf)| (tf.position.x, tf.position.y, cam.zoom));
+
+        if let Some((cam_x, cam_y, cam_zoom)) = camera {
+            s.core.world.query3::<Transform, Shape, Color>().for_each(
+                |(_, transform, shape, color)| {
+                    let mut cmd = make_draw_cmd(&transform, shape, color);
+                    // Apply camera offset and zoom.
+                    cmd = apply_camera_to_cmd(cmd, cam_x, cam_y, cam_zoom);
+                    s.core.draw_queue.push(cmd);
+                },
+            );
+        }
+        // No camera → draw_queue stays empty → black background.
     }
 
     s.core.draw_queue.flush(
@@ -1506,6 +1468,25 @@ fn make_draw_cmd(transform: &Transform, shape: &Shape, color: &Color) -> DrawCom
             width: *width,
             height: *height,
             color: [color.r, color.g, color.b, color.a],
+        },
+    }
+}
+
+/// Translate and scale a draw command by the active camera.
+fn apply_camera_to_cmd(cmd: DrawCommand, cam_x: f32, cam_y: f32, zoom: f32) -> DrawCommand {
+    match cmd {
+        DrawCommand::Circle { x, y, radius, color } => DrawCommand::Circle {
+            x: (x - cam_x) * zoom,
+            y: (y - cam_y) * zoom,
+            radius: radius * zoom,
+            color,
+        },
+        DrawCommand::Rect { x, y, width, height, color } => DrawCommand::Rect {
+            x: (x - cam_x) * zoom,
+            y: (y - cam_y) * zoom,
+            width: width * zoom,
+            height: height * zoom,
+            color,
         },
     }
 }

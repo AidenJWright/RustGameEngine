@@ -27,6 +27,11 @@ pub struct EditorState {
     pub system_component_map: Vec<SystemComponentEntry>,
     /// Index into `component_registry` for the current "Add Component" combo selection.
     pub add_component_selection: usize,
+    /// Current inspector panel width in logical pixels.
+    ///
+    /// Updated each frame from imgui's reported window size so the right-edge
+    /// anchor stays correct even when the user resizes the panel.
+    pub inspector_width: f32,
 }
 
 impl Default for EditorState {
@@ -39,6 +44,7 @@ impl Default for EditorState {
             component_registry: Vec::new(),
             system_component_map: Vec::new(),
             add_component_selection: 0,
+            inspector_width: 300.0,
         }
     }
 }

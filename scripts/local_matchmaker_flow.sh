@@ -74,12 +74,49 @@ CLIENT_PIDS=()
 : >"$HOST_LOG"
 : >"$MATCHMAKER_LOG"
 
+# ---------------------------------------------------------------------------
+# Terminal-spawning helpers.
+# Each instance opens in its own terminal window so output stays separate and
+# processes can be killed individually.
+#
+# Supported backends (auto-detected):
+#   Windows : start "Title" cmd /k "..."
+#   macOS   : osascript (Terminal.app)
+#   Linux   : x-terminal-emulator / gnome-terminal / xterm
+# ---------------------------------------------------------------------------
+
+spawn_terminal() {
+  local title="$1"
+  local dir="$2"
+  local cmd="$3"
+
+  if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$OSTYPE" == "win32" || -n "${WINDIR:-}" ]]; then
+    # Windows (Git Bash / MSYS2 / Cygwin)
+    cmd.exe /c "start \"$title\" cmd /k \"cd /d $(cygpath -w "$dir") && $cmd\""
+  elif [[ "$OSTYPE" == "darwin"* ]]; then
+    osascript -e "tell application \"Terminal\" to do script \"cd '$dir' && $cmd\""
+  elif command -v gnome-terminal &>/dev/null; then
+    gnome-terminal --title="$title" -- bash -c "cd '$dir'; $cmd; exec bash"
+  elif command -v x-terminal-emulator &>/dev/null; then
+    x-terminal-emulator -T "$title" -e bash -c "cd '$dir'; $cmd; exec bash"
+  elif command -v xterm &>/dev/null; then
+    xterm -T "$title" -e bash -c "cd '$dir'; $cmd; exec bash" &
+  else
+    echo "warning: no supported terminal emulator found, running '$title' in background"
+    (cd "$dir" && eval "$cmd") &
+  fi
+}
+
 run_game() {
-  (cd "$ROOT_DIR" && cargo run --quiet --bin game -- --matchmaker "$MATCHMAKER_ADDR" "$@")
+  local title="$1"
+  shift
+  spawn_terminal "$title" "$ROOT_DIR" \
+    "cargo run --quiet --bin game -- --matchmaker \"$MATCHMAKER_ADDR\" $*"
 }
 
 run_matchmaker() {
-  (cd "$ROOT_DIR" && cargo run --quiet --bin matchmaker -- --bind "$MATCHMAKER_ADDR")
+  spawn_terminal "Matchmaker [$MATCHMAKER_ADDR]" "$ROOT_DIR" \
+    "cargo run --quiet --bin matchmaker -- --bind \"$MATCHMAKER_ADDR\""
 }
 
 wait_for_lobby_code() {
@@ -158,30 +195,36 @@ cleanup() {
 
 trap cleanup EXIT
 
-echo "[1/5] starting matchmaker on $MATCHMAKER_ADDR"
-(run_matchmaker >"$MATCHMAKER_LOG" 2>&1) &
-MATCHMAKER_PID=$!
+echo "[1/5] starting matchmaker on $MATCHMAKER_ADDR (new terminal window)"
+run_matchmaker
+# Give the terminal time to open and the process to start.
+sleep 2
 
-sleep 1
-
-echo "[2/5] starting host runtime"
-(run_game host "$HOST_NAME" "$HOST_GAME_ADDR" >"$HOST_LOG" 2>&1) &
+echo "[2/5] starting host runtime (new terminal window)"
+run_game "Host [$HOST_NAME]" host "$HOST_NAME" "$HOST_GAME_ADDR"
 HOST_PID=$!
 
-echo "[3/5] waiting for lobby code"
-LOBBY_AND_ID="$(wait_for_lobby_code "$HOST_LOG" "$MATCHMAKER_LOG" "$HOST_PID")" || {
-  echo "timed out waiting for host lobby creation"
-  echo "host log: $HOST_LOG"
-  echo "matchmaker log: $MATCHMAKER_LOG"
-  exit 1
-}
-
-LOBBY_CODE="${LOBBY_AND_ID%%:*}"
-HOST_ID="${LOBBY_AND_ID##*:}"
-echo "host_client_id=$HOST_ID, lobby_code=$LOBBY_CODE"
+echo "[3/5] waiting for lobby code (check host terminal for output)"
+# Give the host a moment to register the lobby with the matchmaker.
+sleep 3
+# Try to read lobby info from the host log if it exists, otherwise skip.
+LOBBY_CODE=""
+HOST_ID=""
+if [[ -f "$HOST_LOG" ]]; then
+  LOBBY_AND_ID="$(wait_for_lobby_code "$HOST_LOG" "$MATCHMAKER_LOG" "${HOST_PID:-0}" 2>/dev/null)" || true
+  LOBBY_CODE="${LOBBY_AND_ID%%:*}"
+  HOST_ID="${LOBBY_AND_ID##*:}"
+fi
+if [[ -n "$LOBBY_CODE" && -n "$HOST_ID" ]]; then
+  echo "host_client_id=$HOST_ID, lobby_code=$LOBBY_CODE"
+else
+  echo "(lobby code not detected from logs — terminals handle their own output)"
+  LOBBY_CODE="????"
+  HOST_ID="?"
+fi
 
 if (( PLAYER_COUNT > 1 )); then
-  echo "[4/5] starting $((PLAYER_COUNT - 1)) client runtime(s) for lobby $LOBBY_CODE"
+  echo "[4/5] starting $((PLAYER_COUNT - 1)) client terminal(s)"
   for (( i=1; i<PLAYER_COUNT; i++ )); do
     client_port=$((CLIENT_BASE_PORT + i - 1))
     client_addr="$CLIENT_HOST:$client_port"
@@ -190,33 +233,21 @@ if (( PLAYER_COUNT > 1 )); then
     else
       client_name="$CLIENT_NAME-$((i + 1))"
     fi
-    client_log="$ROOT_DIR/logs/matchmaker-client-$((i + 1)).log"
-    : >"$client_log"
-
-    (run_game join "$LOBBY_CODE" "$client_name" "$client_addr" >"$client_log" 2>&1) &
-    client_pid=$!
-
-    CLIENT_PIDS+=("$client_pid")
-    CLIENT_LOGS+=("$client_log")
-    echo "  started client $((i + 1)): name=$client_name addr=$client_addr log=$client_log"
+    run_game "Client $((i + 1)) [$client_name]" join "$LOBBY_CODE" "$client_name" "$client_addr"
+    echo "  opened client $((i + 1)): name=$client_name addr=$client_addr"
+    sleep 1
   done
 else
   echo "[4/5] launching host only (--players=1)"
 fi
 
 if (( RUN_SECONDS > 0 )); then
-  echo "[5/5] running launched game(s) for $RUN_SECONDS seconds"
+  echo "[5/5] all windows open; auto-stopping script in $RUN_SECONDS seconds"
   sleep "$RUN_SECONDS"
-  echo "Demo runtime complete."
+  echo "Script complete. Close individual terminal windows to stop each process."
 else
-  echo "[5/5] running launched game(s); press Ctrl+C to stop"
-  wait "$HOST_PID"
-fi
-
-echo "Matchmaker log: $MATCHMAKER_LOG"
-echo "Host runtime log: $HOST_LOG"
-if (( ${#CLIENT_LOGS[@]} > 0 )); then
-  for client_log in "${CLIENT_LOGS[@]}"; do
-    echo "Client runtime log: $client_log"
-  done
+  echo "[5/5] all terminal windows opened. Press Ctrl+C here to close this script."
+  echo "      Each game/matchmaker runs in its own terminal — close those windows to stop them."
+  # Keep script alive so the cleanup trap fires on Ctrl+C if needed.
+  while true; do sleep 5; done
 fi

@@ -62,6 +62,14 @@ impl ImguiLayer {
         self.platform.handle_event(self.ctx.io_mut(), window, &full);
     }
 
+    /// Inject a single Unicode character directly into imgui's text-input queue.
+    ///
+    /// Used to forward numpad character events when the navigation key event is
+    /// suppressed (numpad double-input fix).
+    pub fn add_input_character(&mut self, ch: char) {
+        self.ctx.io_mut().add_input_character(ch);
+    }
+
     /// Notify imgui that all events for this frame have been processed.
     pub fn handle_about_to_wait(&mut self, window: &Window) {
         self.platform.handle_event(

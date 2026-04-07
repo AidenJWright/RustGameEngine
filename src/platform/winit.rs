@@ -44,6 +44,10 @@ pub enum KeyCode {
     Right,
     Up,
     Down,
+    W,
+    A,
+    S,
+    D,
     /// Any key not explicitly listed above.
     Other(u32),
 }
@@ -133,6 +137,10 @@ pub fn map_physical_key(key: PhysicalKey) -> KeyCode {
         PhysicalKey::Code(WinitKeyCode::ArrowRight) => KeyCode::Right,
         PhysicalKey::Code(WinitKeyCode::ArrowUp) => KeyCode::Up,
         PhysicalKey::Code(WinitKeyCode::ArrowDown) => KeyCode::Down,
+        PhysicalKey::Code(WinitKeyCode::KeyW) => KeyCode::W,
+        PhysicalKey::Code(WinitKeyCode::KeyA) => KeyCode::A,
+        PhysicalKey::Code(WinitKeyCode::KeyS) => KeyCode::S,
+        PhysicalKey::Code(WinitKeyCode::KeyD) => KeyCode::D,
         // Anything unrecognised maps to Other(0) — extend as needed.
         _ => KeyCode::Other(0),
     }

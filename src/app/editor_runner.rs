@@ -5,11 +5,14 @@ use std::time::Instant;
 
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
-use winit::event::{StartCause, WindowEvent};
+use winit::event::{ElementState, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::keyboard::KeyLocation;
 use winit::window::{Window, WindowAttributes, WindowId};
 
-use crate::components::{Color, Shape, SinusoidComponent, Tag, Transform};
+use crate::components::{
+    Color, PlayerInput, Shape, SinusoidComponent, SpawnPoints, Tag, Transform,
+};
 use crate::ecs::entity::Entity;
 use crate::ecs::resource::{DeltaTime, ElapsedTime};
 use crate::ecs::world::World;
@@ -119,23 +122,30 @@ impl EditorRunner {
 
         // --- 3. Clone component data for inspector (avoids mid-UI borrows) ---
         let selected = self.state.selected_entity;
-        let (mut new_transform, mut new_color, mut new_sinusoid) = if let Some(e) = selected {
-            (
-                core.world.get::<Transform>(e).cloned(),
-                core.world.get::<Color>(e).cloned(),
-                core.world.get::<SinusoidComponent>(e).cloned(),
-            )
-        } else {
-            (None, None, None)
-        };
+        let (mut new_transform, mut new_color, mut new_sinusoid, mut new_player_input, mut new_spawn_points) =
+            if let Some(e) = selected {
+                (
+                    core.world.get::<Transform>(e).cloned(),
+                    core.world.get::<Color>(e).cloned(),
+                    core.world.get::<SinusoidComponent>(e).cloned(),
+                    core.world.get::<PlayerInput>(e).cloned(),
+                    core.world.get::<SpawnPoints>(e).cloned(),
+                )
+            } else {
+                (None, None, None, None, None)
+            };
 
         // --- 4. Action flags collected during UI ---
         let mut new_selected = selected;
         let mut transform_changed = false;
         let mut color_changed = false;
         let mut sinusoid_changed = false;
+        let mut player_input_changed = false;
+        let mut spawn_points_changed = false;
         let mut remove_color = false;
         let mut remove_sinusoid = false;
+        let mut remove_player_input = false;
+        let mut remove_spawn_points = false;
         let mut spawn_req = false;
         let mut despawn_req = false;
         let mut run_game_req = false;
@@ -145,6 +155,12 @@ impl EditorRunner {
         let mut cam_zoom = 0.0_f32;
         // Index into component_registry to add after the UI pass; None = no add.
         let mut add_component_req: Option<usize> = None;
+        // Drag-and-drop reparent request: (child, new_parent).
+        let mut reparent_req: Option<(Entity, Entity)> = None;
+        // Make dragged entity a root (detach from parent).
+        let mut detach_req: Option<Entity> = None;
+        // Inspector width read back from imgui each frame.
+        let mut captured_inspector_width = self.state.inspector_width;
 
         // --- 5. Begin GPU frame ---
         let Some((surface_texture, view)) = core.render_ctx.begin_frame() else {
@@ -195,7 +211,7 @@ impl EditorRunner {
                     ui.text(format!("  Scene: {}", self.state.scene_path));
                 });
 
-            // Hierarchy panel
+            // Hierarchy panel — drag-and-drop to reorder / reparent.
             ui.window("Scene Hierarchy")
                 .size([210.0, h - 55.0], imgui::Condition::Always)
                 .position([0.0, 30.0], imgui::Condition::Always)
@@ -207,17 +223,74 @@ impl EditorRunner {
                         if ui.button(&btn_label) {
                             new_selected = Some(*entity);
                         }
+
+                        // --- Drag source: grab this entity ---
+                        // Encode entity as u64 (index | generation<<32).
+                        let drag_id =
+                            (entity.index as u64) | ((entity.generation as u64) << 32);
+                        if let Some(src) = ui
+                            .drag_drop_source_config("entity_drag")
+                            .begin_payload(drag_id)
+                        {
+                            ui.text(format!("Moving: {label}"));
+                            src.end();
+                        }
+
+                        // --- Drop target: reparent onto this entity ---
+                        if let Some(target) = ui.drag_drop_target() {
+                            if let Some(Ok(payload)) = target.accept_payload::<u64, _>(
+                                "entity_drag",
+                                imgui::DragDropFlags::empty(),
+                            ) {
+                                let raw = payload.data;
+                                let dragged = Entity::new(
+                                    (raw & 0xFFFF_FFFF) as u32,
+                                    (raw >> 32) as u32,
+                                );
+                                if dragged != *entity {
+                                    reparent_req = Some((dragged, *entity));
+                                }
+                            }
+                        }
+                    }
+
+                    // Drop onto empty area of the hierarchy = make root.
+                    ui.dummy([0.0, ui.content_region_avail()[1].max(8.0)]);
+                    if let Some(target) = ui.drag_drop_target() {
+                        if let Some(Ok(payload)) = target.accept_payload::<u64, _>(
+                            "entity_drag",
+                            imgui::DragDropFlags::empty(),
+                        ) {
+                            let raw = payload.data;
+                            let dragged = Entity::new(
+                                (raw & 0xFFFF_FFFF) as u32,
+                                (raw >> 32) as u32,
+                            );
+                            detach_req = Some(dragged);
+                        }
                     }
                 });
 
-            // Inspector panel — position is always re-derived from current window
-            // width so it snaps to the right edge even after resizing.
+            // Inspector panel.
+            // Position is anchored to the right edge every frame.
+            // Size uses FirstUseEver so the user can resize the panel; the width
+            // is read back each frame via `ui.window_size()` to keep the anchor correct.
+            let insp_x = (w - self.state.inspector_width - 10.0).max(220.0);
             if selected.is_some() {
                 ui.window("Inspector")
-                    .size([280.0, h - 55.0], imgui::Condition::Always)
-                    .position([w - 290.0, 30.0], imgui::Condition::Always)
-                    .flags(imgui::WindowFlags::NO_SAVED_SETTINGS)
+                    .size(
+                        [self.state.inspector_width, h - 55.0],
+                        imgui::Condition::FirstUseEver,
+                    )
+                    .position([insp_x, 30.0], imgui::Condition::Always)
+                    .flags(
+                        imgui::WindowFlags::NO_SAVED_SETTINGS
+                            | imgui::WindowFlags::NO_MOVE,
+                    )
                     .build(|| {
+                        // Read back actual width so we can update the anchor next frame.
+                        captured_inspector_width = ui.window_size()[0];
+
                         if let Some(entity) = selected {
                             ui.text(format!("{entity}"));
                             ui.separator();
@@ -235,7 +308,7 @@ impl EditorRunner {
                             names.join(", ")
                         };
 
-                        // --- Transform (guaranteed on every entity, cannot be removed) ---
+                        // --- Transform (guaranteed, cannot be removed) ---
                         if let Some(ref mut tf) = new_transform {
                             ui.text("[ Transform ]");
                             if ui.input_float("px##tf", &mut tf.position.x).build() {
@@ -306,8 +379,102 @@ impl EditorRunner {
                             ui.separator();
                         }
 
+                        // --- PlayerInput ---
+                        if let Some(ref mut pi) = new_player_input {
+                            ui.text("[ Player Input ]");
+
+                            // Build label lists for combo boxes.
+                            use crate::components::ConfigKey;
+                            let key_labels: Vec<&str> =
+                                ConfigKey::ALL.iter().map(|k| k.label()).collect();
+
+                            let mut h_neg = pi.horizontal.negative.index();
+                            let mut h_pos = pi.horizontal.positive.index();
+                            let mut v_neg = pi.vertical.negative.index();
+                            let mut v_pos = pi.vertical.positive.index();
+
+                            ui.text("Horizontal axis:");
+                            if ui.combo_simple_string("H-##pi", &mut h_neg, &key_labels) {
+                                pi.horizontal.negative = ConfigKey::ALL[h_neg];
+                                player_input_changed = true;
+                            }
+                            ui.same_line();
+                            ui.text("neg");
+                            if ui.combo_simple_string("H+##pi", &mut h_pos, &key_labels) {
+                                pi.horizontal.positive = ConfigKey::ALL[h_pos];
+                                player_input_changed = true;
+                            }
+                            ui.same_line();
+                            ui.text("pos");
+
+                            ui.text("Vertical axis:");
+                            if ui.combo_simple_string("V-##pi", &mut v_neg, &key_labels) {
+                                pi.vertical.negative = ConfigKey::ALL[v_neg];
+                                player_input_changed = true;
+                            }
+                            ui.same_line();
+                            ui.text("neg");
+                            if ui.combo_simple_string("V+##pi", &mut v_pos, &key_labels) {
+                                pi.vertical.positive = ConfigKey::ALL[v_pos];
+                                player_input_changed = true;
+                            }
+                            ui.same_line();
+                            ui.text("pos");
+
+                            if ui.slider("Speed##pi", 0.0_f32, 1000.0, &mut pi.speed) {
+                                player_input_changed = true;
+                            }
+
+                            let pi_systems = systems_for("PlayerInput");
+                            if !pi_systems.is_empty() {
+                                ui.text_disabled(format!("  Used by: {pi_systems}"));
+                            }
+                            if ui.small_button("Remove##rm_pi") {
+                                remove_player_input = true;
+                            }
+                            ui.separator();
+                        }
+
+                        // --- SpawnPoints ---
+                        if let Some(ref mut sp) = new_spawn_points {
+                            ui.text("[ Spawn Points ]");
+                            ui.text(format!("{} slot(s)", sp.positions.len()));
+                            let mut changed = false;
+                            let mut remove_idx: Option<usize> = None;
+                            for (i, pos) in sp.positions.iter_mut().enumerate() {
+                                let label_x = format!("x##{i}sp");
+                                let label_y = format!("y##{i}sp");
+                                let label_rm = format!("-##{i}sp");
+                                if ui.input_float(&label_x, &mut pos[0]).build() {
+                                    changed = true;
+                                }
+                                ui.same_line();
+                                if ui.input_float(&label_y, &mut pos[1]).build() {
+                                    changed = true;
+                                }
+                                ui.same_line();
+                                if ui.small_button(&label_rm) {
+                                    remove_idx = Some(i);
+                                }
+                            }
+                            if let Some(i) = remove_idx {
+                                sp.positions.remove(i);
+                                changed = true;
+                            }
+                            if ui.small_button("+ Add Spawn Point") {
+                                sp.positions.push([0.0, 0.0, 0.0]);
+                                changed = true;
+                            }
+                            if changed {
+                                spawn_points_changed = true;
+                            }
+                            if ui.small_button("Remove##rm_sp") {
+                                remove_spawn_points = true;
+                            }
+                            ui.separator();
+                        }
+
                         // --- Add Component dropdown ---
-                        // Build list of component names not yet on this entity.
                         if let Some(entity) = selected {
                             let absent_indices: Vec<usize> = self
                                 .state
@@ -324,7 +491,6 @@ impl EditorRunner {
                                     .map(|&i| self.state.component_registry[i].name)
                                     .collect();
 
-                                // Clamp selection index to valid range.
                                 if self.state.add_component_selection >= absent_indices.len() {
                                     self.state.add_component_selection = 0;
                                 }
@@ -350,7 +516,7 @@ impl EditorRunner {
                     });
             }
 
-            // Camera control via imgui IO (right-drag to pan, scroll to zoom)
+            // Camera control via imgui IO (middle-drag to pan, scroll to zoom)
             {
                 let io = ui.io();
                 if io.mouse_down[2] && !ui.is_any_item_active() {
@@ -390,9 +556,30 @@ impl EditorRunner {
 
         // --- 7. Apply state changes collected during UI ---
         self.state.selected_entity = new_selected;
+        self.state.inspector_width = captured_inspector_width;
         self.state.camera.pan(cam_pan[0], cam_pan[1]);
         if cam_zoom != 0.0 {
             self.state.camera.zoom_toward(cam_zoom);
+        }
+
+        // Hierarchy drag-to-reorder.
+        if let Some((child, new_parent)) = reparent_req {
+            // Guard against cycles: don't parent an ancestor onto its own descendant.
+            let mut is_ancestor = false;
+            let mut cursor = Some(new_parent);
+            while let Some(cur) = cursor {
+                if cur == child {
+                    is_ancestor = true;
+                    break;
+                }
+                cursor = core.world.scene_tree().parent(cur);
+            }
+            if !is_ancestor {
+                core.world.scene_tree.attach(child, new_parent);
+            }
+        }
+        if let Some(entity) = detach_req {
+            core.world.scene_tree.detach(entity);
         }
 
         if let Some(entity) = selected {
@@ -415,6 +602,22 @@ impl EditorRunner {
             } else if sinusoid_changed {
                 if let Some(s) = new_sinusoid {
                     core.world.insert(entity, s);
+                }
+            }
+
+            if remove_player_input {
+                core.world.remove::<PlayerInput>(entity);
+            } else if player_input_changed {
+                if let Some(pi) = new_player_input {
+                    core.world.insert(entity, pi);
+                }
+            }
+
+            if remove_spawn_points {
+                core.world.remove::<SpawnPoints>(entity);
+            } else if spawn_points_changed {
+                if let Some(sp) = new_spawn_points {
+                    core.world.insert(entity, sp);
                 }
             }
 
@@ -517,8 +720,32 @@ impl ApplicationHandler for EditorHandle {
             return;
         }
 
-        core.imgui
-            .handle_window_event(core.platform.window(), window_id, &event);
+        // Numpad double-input fix: when a numpad key produces a text character
+        // (NumLock is ON), imgui-winit-support would map it to both a navigation
+        // key (e.g. Numpad4 → LeftArrow) AND the character "4".  We skip the
+        // full keyboard event and inject only the character manually so imgui
+        // text fields receive the digit without unwanted cursor movement.
+        let is_numpad_with_text = matches!(
+            &event,
+            WindowEvent::KeyboardInput { event: ke, .. }
+                if ke.location == KeyLocation::Numpad
+                    && ke.text.is_some()
+                    && ke.state == ElementState::Pressed
+        );
+
+        if is_numpad_with_text {
+            // Inject just the characters into imgui; skip key navigation.
+            if let WindowEvent::KeyboardInput { event: ref ke, .. } = event {
+                if let Some(ref text) = ke.text {
+                    for ch in text.chars() {
+                        core.imgui.add_input_character(ch);
+                    }
+                }
+            }
+        } else {
+            core.imgui
+                .handle_window_event(core.platform.window(), window_id, &event);
+        }
 
         match &event {
             WindowEvent::CloseRequested => event_loop.exit(),

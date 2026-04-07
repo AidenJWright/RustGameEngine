@@ -16,7 +16,8 @@ use std::f32::consts::PI;
 
 use forge_ecs::app::EditorRunner;
 use forge_ecs::components::{
-    Camera, Color, Health, Shape, SinusoidComponent, Tag, Transform, Velocity,
+    Camera, Color, Health, PlayerInput, Shape, SinusoidComponent, SpawnPoints, Tag, Transform,
+    Velocity,
 };
 use forge_ecs::editor::{ComponentDescriptor, SystemComponentEntry};
 use forge_ecs::math::Vec3;
@@ -119,6 +120,26 @@ fn main() {
                 w.remove::<Camera>(e);
             },
         },
+        ComponentDescriptor {
+            name: "PlayerInput",
+            has: |w, e| w.get::<PlayerInput>(e).is_some(),
+            add: |w, e| {
+                w.insert(e, PlayerInput::default());
+            },
+            remove: |w, e| {
+                w.remove::<PlayerInput>(e);
+            },
+        },
+        ComponentDescriptor {
+            name: "SpawnPoints",
+            has: |w, e| w.get::<SpawnPoints>(e).is_some(),
+            add: |w, e| {
+                w.insert(e, SpawnPoints::default_two());
+            },
+            remove: |w, e| {
+                w.remove::<SpawnPoints>(e);
+            },
+        },
     ];
 
     // System-to-component map: drives the "Used by:" display in the inspector.
@@ -134,6 +155,10 @@ fn main() {
         SystemComponentEntry {
             system_name: "HealthSystem",
             component_names: &["Health"],
+        },
+        SystemComponentEntry {
+            system_name: "PlayerInputSystem",
+            component_names: &["PlayerInput", "Velocity"],
         },
     ];
 

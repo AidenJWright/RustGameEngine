@@ -59,3 +59,35 @@ pub struct DeltaTime(pub f32);
 /// Total elapsed time since engine start, in seconds.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ElapsedTime(pub f32);
+
+/// Set of currently held keys, updated by the game loop each frame.
+///
+/// Systems can read this resource to implement key-driven behaviour without
+/// coupling to the winit event loop directly.
+///
+/// Keys are stored as `u32` discriminants matching the engine `KeyCode` enum
+/// to avoid a cross-module dependency on `crate::platform` from within `ecs`.
+/// The helper methods on `KeysPressed` use `crate::platform::KeyCode` which is
+/// re-exported from the engine root.
+#[derive(Debug, Default, Clone)]
+pub struct KeysPressed {
+    /// Raw set of pressed key discriminants.
+    pub held: std::collections::HashSet<u32>,
+}
+
+impl KeysPressed {
+    /// Record a key as pressed.
+    pub fn press(&mut self, discriminant: u32) {
+        self.held.insert(discriminant);
+    }
+
+    /// Record a key as released.
+    pub fn release(&mut self, discriminant: u32) {
+        self.held.remove(&discriminant);
+    }
+
+    /// Test whether a key is currently held.
+    pub fn is_held(&self, discriminant: u32) -> bool {
+        self.held.contains(&discriminant)
+    }
+}

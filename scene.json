@@ -1,0 +1,118 @@
+{
+  "version": 1,
+  "entities": [
+    {
+      "id": 0,
+      "parent": null,
+      "tag": "scene_root",
+      "transform": null,
+      "color": null,
+      "shape": null,
+      "velocity": null,
+      "health": null,
+      "sinusoid": null,
+      "camera": null
+    },
+    {
+      "id": 4294967296,
+      "parent": 0,
+      "tag": null,
+      "transform": {
+        "position": {
+          "x": -200.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "rotation": 0.0,
+        "scale": {
+          "x": 1.0,
+          "y": 1.0,
+          "z": 1.0
+        }
+      },
+      "color": {
+        "r": 1.0,
+        "g": 0.4,
+        "b": 0.15686275,
+        "a": 1.0
+      },
+      "shape": {
+        "Circle": {
+          "radius": 50.0
+        }
+      },
+      "velocity": null,
+      "health": null,
+      "sinusoid": {
+        "amplitude": 150.0,
+        "frequency": 1.0,
+        "phase": 0.0,
+        "base_y": 0.0
+      },
+      "camera": null
+    },
+    {
+      "id": 8589934592,
+      "parent": 0,
+      "tag": null,
+      "transform": {
+        "position": {
+          "x": 200.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "rotation": 0.0,
+        "scale": {
+          "x": 1.0,
+          "y": 1.0,
+          "z": 1.0
+        }
+      },
+      "color": {
+        "r": 0.2,
+        "g": 0.6,
+        "b": 1.0,
+        "a": 1.0
+      },
+      "shape": {
+        "Rect": {
+          "width": 100.0,
+          "height": 100.0
+        }
+      },
+      "velocity": null,
+      "health": null,
+      "sinusoid": {
+        "amplitude": 150.0,
+        "frequency": 1.0,
+        "phase": 1.5707964,
+        "base_y": 0.0
+      },
+      "camera": null
+    },
+    {
+      "id": 12884901888,
+      "parent": null,
+      "tag": null,
+      "transform": {
+        "position": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "rotation": 0.0,
+        "scale": {
+          "x": 1.0,
+          "y": 1.0,
+          "z": 1.0
+        }
+      },
+      "color": null,
+      "shape": null,
+      "velocity": null,
+      "health": null,
+      "sinusoid": null,
+      "camera": null
+    }
+  ]
+}

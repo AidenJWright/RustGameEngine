@@ -3,7 +3,7 @@
 //! Run with: `cargo run --bin editor`
 //!
 //! Controls:
-//!  - Right-drag on viewport → pan camera
+//!  - Middle-drag on viewport → pan camera
 //!  - Scroll wheel on viewport → zoom camera
 //!  - Click entity in hierarchy → select for inspection
 //!  - Inspector panel → edit Transform / Color / Sinusoid components
@@ -15,16 +15,127 @@
 use std::f32::consts::PI;
 
 use forge_ecs::app::EditorRunner;
-use forge_ecs::components::Transform;
-use forge_ecs::components::{Color, Shape, Tag};
+use forge_ecs::components::{
+    Camera, Color, Health, Shape, SinusoidComponent, Tag, Transform, Velocity,
+};
+use forge_ecs::editor::{ComponentDescriptor, SystemComponentEntry};
 use forge_ecs::math::Vec3;
-use forge_ecs::messaging::LoopPhase;
-use forge_ecs::systems::sinusoid::SinusoidComponent;
-use forge_ecs::systems::SinusoidSystem;
 
 fn main() {
     let mut runner = EditorRunner::new();
-    runner.bus.register(LoopPhase::Update, 0, SinusoidSystem);
+    // SinusoidSystem is intentionally NOT registered in the editor — entities
+    // should remain static while editing.  It runs only in the game binary.
+
+    // Populate the component descriptor registry used by the "Add Component"
+    // dropdown.  Transform is excluded — it is guaranteed on every entity.
+    runner.state.component_registry = vec![
+        ComponentDescriptor {
+            name: "Color",
+            has: |w, e| w.get::<Color>(e).is_some(),
+            add: |w, e| {
+                w.insert(
+                    e,
+                    Color {
+                        r: 1.0,
+                        g: 1.0,
+                        b: 1.0,
+                        a: 1.0,
+                    },
+                );
+            },
+            remove: |w, e| {
+                w.remove::<Color>(e);
+            },
+        },
+        ComponentDescriptor {
+            name: "Shape",
+            has: |w, e| w.get::<Shape>(e).is_some(),
+            add: |w, e| {
+                w.insert(e, Shape::Circle { radius: 50.0 });
+            },
+            remove: |w, e| {
+                w.remove::<Shape>(e);
+            },
+        },
+        ComponentDescriptor {
+            name: "SinusoidComponent",
+            has: |w, e| w.get::<SinusoidComponent>(e).is_some(),
+            add: |w, e| {
+                w.insert(
+                    e,
+                    SinusoidComponent {
+                        amplitude: 100.0,
+                        frequency: 1.0,
+                        phase: 0.0,
+                        base_y: 0.0,
+                    },
+                );
+            },
+            remove: |w, e| {
+                w.remove::<SinusoidComponent>(e);
+            },
+        },
+        ComponentDescriptor {
+            name: "Velocity",
+            has: |w, e| w.get::<Velocity>(e).is_some(),
+            add: |w, e| {
+                w.insert(e, Velocity { dx: 0.0, dy: 0.0 });
+            },
+            remove: |w, e| {
+                w.remove::<Velocity>(e);
+            },
+        },
+        ComponentDescriptor {
+            name: "Health",
+            has: |w, e| w.get::<Health>(e).is_some(),
+            add: |w, e| {
+                w.insert(e, Health { current: 100.0, max: 100.0 });
+            },
+            remove: |w, e| {
+                w.remove::<Health>(e);
+            },
+        },
+        ComponentDescriptor {
+            name: "Tag",
+            has: |w, e| w.get::<Tag>(e).is_some(),
+            add: |w, e| {
+                w.insert(e, Tag::new("entity"));
+            },
+            remove: |w, e| {
+                w.remove::<Tag>(e);
+            },
+        },
+        ComponentDescriptor {
+            name: "Camera",
+            has: |w, e| w.get::<Camera>(e).is_some(),
+            add: |w, e| {
+                // Enforce singleton: only add if no Camera exists in the scene.
+                let already_exists = w.query::<Camera>().next().is_some();
+                if !already_exists {
+                    w.insert(e, Camera::new());
+                }
+            },
+            remove: |w, e| {
+                w.remove::<Camera>(e);
+            },
+        },
+    ];
+
+    // System-to-component map: drives the "Used by:" display in the inspector.
+    runner.state.system_component_map = vec![
+        SystemComponentEntry {
+            system_name: "SinusoidSystem",
+            component_names: &["Transform", "SinusoidComponent"],
+        },
+        SystemComponentEntry {
+            system_name: "MovementSystem",
+            component_names: &["Transform", "Velocity"],
+        },
+        SystemComponentEntry {
+            system_name: "HealthSystem",
+            component_names: &["Health"],
+        },
+    ];
 
     runner.run("Forge ECS — Editor", 1280, 720, |world| {
         let scene_root = world.spawn();

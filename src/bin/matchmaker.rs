@@ -26,8 +26,12 @@ const AUTO_START_AFTER_TARGET_SECS: u64 = 5;
     about = "Matchmaker server for Forge ECS multiplayer lobby coordination"
 )]
 struct Args {
-    /// Address that the matchmaker binds to, e.g. 127.0.0.1:7000
-    #[arg(long, default_value = "127.0.0.1:7000")]
+    /// Address that the matchmaker binds to.
+    ///
+    /// For local testing: `127.0.0.1:7000` (default).
+    /// For remote server deployment: `0.0.0.0:7000` to accept connections on all interfaces.
+    /// Override with the `MATCHMAKER_BIND` environment variable instead of a flag if preferred.
+    #[arg(long, default_value = "127.0.0.1:7000", env = "MATCHMAKER_BIND")]
     bind: String,
 }
 

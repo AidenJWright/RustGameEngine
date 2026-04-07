@@ -8,7 +8,7 @@ POSITIONAL_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -p|--players)
+    -p|--players|-n|--num-players)
       if [[ $# -lt 2 ]]; then
         echo "missing value for $1"
         exit 1
@@ -18,18 +18,25 @@ while [[ $# -gt 0 ]]; do
       ;;
     -h|--help)
       cat <<'USAGE'
-Usage: scripts/local_matchmaker_flow.sh [--players N] [MATCHMAKER_ADDR] [HOST_GAME_ADDR] [CLIENT_GAME_ADDR] [HOST_NAME] [CLIENT_NAME] [RUN_SECONDS]
+Usage: scripts/local_matchmaker_flow.sh [-n N] [MATCHMAKER_ADDR] [HOST_GAME_ADDR] [CLIENT_GAME_ADDR] [HOST_NAME] [CLIENT_NAME] [RUN_SECONDS]
 
 Options:
-  -p, --players N    Number of game instances to launch (1-4, default: 2)
+  -n, --num-players N    Number of game instances to launch (default: 2)
+  -p, --players N        Alias for -n
 
 Positionals (all optional):
-  MATCHMAKER_ADDR      Matchmaker bind addr (default: 127.0.0.1:7000)
+  MATCHMAKER_ADDR      Matchmaker address that clients connect to (default: 127.0.0.1:7000)
+                       For a remote matchmaker, pass the server IP:port here, e.g. 203.0.113.5:7000
   HOST_GAME_ADDR       Host game addr (default: 127.0.0.1:7101)
   CLIENT_GAME_ADDR     Base client game addr; extra clients increment port (default: 127.0.0.1:7102)
   HOST_NAME            Host player name (default: Player-One)
   CLIENT_NAME          First client name (default: Player-Two); extra clients add numeric suffixes
   RUN_SECONDS          Runtime before auto-stop, 0 means run until Ctrl+C (default: 0)
+
+Remote matchmaker deployment:
+  On the server: MATCHMAKER_BIND=0.0.0.0:7000 cargo run --bin matchmaker
+  On clients:    MATCHMAKER_ADDR=<server-ip>:7000 cargo run --bin game
+  Via this script: ./scripts/local_matchmaker_flow.sh <server-ip>:7000
 USAGE
       exit 0
       ;;
@@ -40,8 +47,8 @@ USAGE
   esac
 done
 
-if ! [[ "$PLAYER_COUNT" =~ ^[1-4]$ ]]; then
-  echo "--players must be an integer in range 1-4"
+if ! [[ "$PLAYER_COUNT" =~ ^[1-9][0-9]*$ ]]; then
+  echo "-n/--num-players must be a positive integer"
   exit 1
 fi
 

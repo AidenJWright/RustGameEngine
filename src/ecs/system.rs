@@ -41,11 +41,19 @@ impl System for FnSystem {
 
 /// Runs registered systems in insertion order, flushing the command buffer
 /// after each one so that despawned/spawned entities are visible to later systems.
+///
+/// # Deprecation
+///
+/// Prefer [`crate::messaging::MessageBus`] which supports phase ordering
+/// (`First` / `Update` / `Last`) and per-system priority.  `Scheduler` is
+/// retained for compatibility but may be removed in a future release.
+#[deprecated(note = "Use MessageBus with LoopPhase instead")]
 #[derive(Default)]
 pub struct Scheduler {
     systems: Vec<Box<dyn System>>,
 }
 
+#[allow(deprecated)]
 impl Scheduler {
     /// Create an empty scheduler.
     pub fn new() -> Self {

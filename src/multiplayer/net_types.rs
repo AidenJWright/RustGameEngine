@@ -178,4 +178,33 @@ pub enum NetworkEvent {
         /// Authoritative hash value.
         remote_hash: u64,
     },
+    /// Host broadcast its authoritative state hash for validation.
+    ///
+    /// The game loop should compare this against the local `state_hash`
+    /// and trigger a correction if they differ.
+    HostHashReceived {
+        /// Simulation tick for this hash checkpoint.
+        tick: NetworkTick,
+        /// Authoritative hash value from the host.
+        host_hash: u64,
+    },
+}
+
+/// ECS resource that decouples the game loop from the `MatchSession`.
+///
+/// Each frame the network tick loop drains session events into this resource
+/// *before* calling `bus.run_frame()`.  Game systems read from here instead of
+/// touching `MatchSession` directly, keeping networking out of the system layer.
+///
+/// After `bus.run_frame()` the loop drains any outbound input from this resource
+/// and sends it via the session.
+pub struct NetworkResource {
+    /// Events that arrived from the network this frame.
+    pub pending_events: Vec<NetworkEvent>,
+    /// Peer ID of the local player.
+    pub local_peer_id: u64,
+    /// `true` when this peer is the authoritative host.
+    pub is_host: bool,
+    /// Outbound input queued by game logic for the session to send.
+    pub outbound_input: Option<InputFrame>,
 }

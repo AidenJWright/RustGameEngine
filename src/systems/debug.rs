@@ -6,12 +6,20 @@ use crate::components::Transform;
 use crate::ecs::command_buffer::CommandBuffer;
 use crate::ecs::system::System;
 use crate::ecs::world::World;
+use crate::messaging::LoopPhase;
 
 /// Prints each entity's transform to stdout every frame.
 ///
 /// Useful during development; typically only added in debug builds.
 #[derive(Debug, Default)]
 pub struct DebugSystem;
+
+impl DebugSystem {
+    /// Recommended registration phase for this system.
+    pub const PHASE: LoopPhase = LoopPhase::Last;
+    /// Recommended registration priority for this system.
+    pub const PRIORITY: i32 = 0;
+}
 
 impl System for DebugSystem {
     fn run(&self, world: &World, _commands: &mut CommandBuffer) {

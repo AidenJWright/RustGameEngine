@@ -11,7 +11,7 @@ use winit::event::{StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowAttributes, WindowId};
 
-use crate::components::{Color, Shape, Transform};
+use crate::components::{Camera, Color, Shape, Transform};
 use crate::ecs::resource::{DeltaTime, ElapsedTime};
 use crate::ecs::world::World;
 use crate::messaging::MessageBus;
@@ -79,11 +79,24 @@ impl GameRunner {
     fn render(&mut self, core: &mut AppCore) {
         core.render_ctx.sync_with_window(core.platform.window());
 
-        // Queue scene draw commands (world-space → screen-space with top-left origin).
+        // Find the Camera entity's viewport offset.  If no camera exists the
+        // renderer falls back to world-origin (0, 0) with 1:1 zoom.
+        let (cam_x, cam_y, cam_zoom) = core
+            .world
+            .query2::<Camera, Transform>()
+            .next()
+            .map(|(_, cam, tf)| (tf.position.x, tf.position.y, cam.zoom))
+            .unwrap_or((0.0, 0.0, 1.0));
+
+        // Queue scene draw commands, applying camera offset and zoom.
+        // Entities that carry a Camera component are still rendered as objects
+        // (they may have a Shape); the camera only drives the viewport transform.
         core.world
             .query3::<Transform, Shape, Color>()
             .for_each(|(_, transform, shape, color)| {
-                let cmd = make_draw_cmd(transform, shape, color);
+                let mut cmd = make_draw_cmd(transform, shape, color);
+                // Translate by camera position and scale by zoom.
+                cmd = apply_camera(cmd, cam_x, cam_y, cam_zoom);
                 core.draw_queue.push(cmd);
             });
 
@@ -200,7 +213,7 @@ impl ApplicationHandler for GameHandle {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Convert a `(Transform, Shape, Color)` triple to a screen-space `DrawCommand`.
+/// Convert a `(Transform, Shape, Color)` triple to a world-space `DrawCommand`.
 pub(crate) fn make_draw_cmd(transform: &Transform, shape: &Shape, color: &Color) -> DrawCommand {
     match shape {
         Shape::Circle { radius } => DrawCommand::Circle {
@@ -215,6 +228,28 @@ pub(crate) fn make_draw_cmd(transform: &Transform, shape: &Shape, color: &Color)
             width: *width,
             height: *height,
             color: [color.r, color.g, color.b, color.a],
+        },
+    }
+}
+
+/// Translate and scale a draw command by the active camera's position and zoom.
+///
+/// Subtracting `cam_x/cam_y` shifts the world so the camera entity sits at the
+/// screen origin; multiplying by `zoom` scales objects accordingly.
+fn apply_camera(cmd: DrawCommand, cam_x: f32, cam_y: f32, zoom: f32) -> DrawCommand {
+    match cmd {
+        DrawCommand::Circle { x, y, radius, color } => DrawCommand::Circle {
+            x: (x - cam_x) * zoom,
+            y: (y - cam_y) * zoom,
+            radius: radius * zoom,
+            color,
+        },
+        DrawCommand::Rect { x, y, width, height, color } => DrawCommand::Rect {
+            x: (x - cam_x) * zoom,
+            y: (y - cam_y) * zoom,
+            width: width * zoom,
+            height: height * zoom,
+            color,
         },
     }
 }

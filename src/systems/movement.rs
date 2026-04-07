@@ -12,10 +12,18 @@ use crate::ecs::resource::DeltaTime;
 use crate::ecs::system::System;
 use crate::ecs::world::World;
 use crate::math::Vec3;
+use crate::messaging::LoopPhase;
 
 /// Applies linear velocity to entity positions every frame.
 #[derive(Debug, Default)]
 pub struct MovementSystem;
+
+impl MovementSystem {
+    /// Recommended registration phase for this system.
+    pub const PHASE: LoopPhase = LoopPhase::Update;
+    /// Recommended registration priority for this system.
+    pub const PRIORITY: i32 = 0;
+}
 
 impl System for MovementSystem {
     fn run(&self, world: &World, commands: &mut CommandBuffer) {

@@ -26,7 +26,7 @@ use forge_ecs::renderer::context::RenderContext;
 use forge_ecs::renderer::draw::{DrawCommand, DrawQueue};
 use forge_ecs::renderer::imgui_layer::ImguiLayer;
 use forge_ecs::renderer::{CirclePipeline, RectPipeline};
-use forge_ecs::systems::sinusoid::SinusoidComponent;
+use forge_ecs::components::SinusoidComponent;
 use forge_ecs::systems::SinusoidSystem;
 
 // ---------------------------------------------------------------------------

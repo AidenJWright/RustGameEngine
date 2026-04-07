@@ -9,7 +9,7 @@ use winit::event::{StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowAttributes, WindowId};
 
-use crate::components::{Color, Shape, Tag, Transform};
+use crate::components::{Color, Shape, SinusoidComponent, Tag, Transform};
 use crate::ecs::entity::Entity;
 use crate::ecs::resource::{DeltaTime, ElapsedTime};
 use crate::ecs::world::World;
@@ -17,7 +17,6 @@ use crate::editor::EditorState;
 use crate::messaging::MessageBus;
 use crate::renderer::draw::DrawCommand;
 use crate::scene::{load_scene, save_scene};
-use crate::systems::sinusoid::SinusoidComponent;
 
 use super::core::AppCore;
 use super::game_runner::make_draw_cmd;
@@ -135,7 +134,6 @@ impl EditorRunner {
         let mut transform_changed = false;
         let mut color_changed = false;
         let mut sinusoid_changed = false;
-        let mut remove_transform = false;
         let mut remove_color = false;
         let mut remove_sinusoid = false;
         let mut spawn_req = false;
@@ -145,6 +143,8 @@ impl EditorRunner {
         let mut load_req = false;
         let mut cam_pan = [0.0_f32; 2];
         let mut cam_zoom = 0.0_f32;
+        // Index into component_registry to add after the UI pass; None = no add.
+        let mut add_component_req: Option<usize> = None;
 
         // --- 5. Begin GPU frame ---
         let Some((surface_texture, view)) = core.render_ctx.begin_frame() else {
@@ -210,18 +210,32 @@ impl EditorRunner {
                     }
                 });
 
-            // Inspector panel
+            // Inspector panel — position is always re-derived from current window
+            // width so it snaps to the right edge even after resizing.
             if selected.is_some() {
                 ui.window("Inspector")
                     .size([280.0, h - 55.0], imgui::Condition::Always)
                     .position([w - 290.0, 30.0], imgui::Condition::Always)
+                    .flags(imgui::WindowFlags::NO_SAVED_SETTINGS)
                     .build(|| {
                         if let Some(entity) = selected {
                             ui.text(format!("{entity}"));
                             ui.separator();
                         }
 
-                        // --- Transform ---
+                        // Helper: collect system names that read a given component.
+                        let systems_for = |comp: &str| -> String {
+                            let names: Vec<&str> = self
+                                .state
+                                .system_component_map
+                                .iter()
+                                .filter(|e| e.component_names.contains(&comp))
+                                .map(|e| e.system_name)
+                                .collect();
+                            names.join(", ")
+                        };
+
+                        // --- Transform (guaranteed on every entity, cannot be removed) ---
                         if let Some(ref mut tf) = new_transform {
                             ui.text("[ Transform ]");
                             if ui.input_float("px##tf", &mut tf.position.x).build() {
@@ -239,13 +253,11 @@ impl EditorRunner {
                             if ui.input_float("sy##tf", &mut tf.scale.y).build() {
                                 transform_changed = true;
                             }
-                            if ui.small_button("Remove##rm_tf") {
-                                remove_transform = true;
+                            let tf_systems = systems_for("Transform");
+                            if !tf_systems.is_empty() {
+                                ui.text_disabled(format!("  Used by: {tf_systems}"));
                             }
                             ui.separator();
-                        } else if ui.button("+ Transform") {
-                            new_transform = Some(Transform::identity());
-                            transform_changed = true;
                         }
 
                         // --- Color ---
@@ -259,18 +271,14 @@ impl EditorRunner {
                                 c.a = arr[3];
                                 color_changed = true;
                             }
+                            let col_systems = systems_for("Color");
+                            if !col_systems.is_empty() {
+                                ui.text_disabled(format!("  Used by: {col_systems}"));
+                            }
                             if ui.small_button("Remove##rm_col") {
                                 remove_color = true;
                             }
                             ui.separator();
-                        } else if ui.button("+ Color") {
-                            new_color = Some(Color {
-                                r: 1.0,
-                                g: 1.0,
-                                b: 1.0,
-                                a: 1.0,
-                            });
-                            color_changed = true;
                         }
 
                         // --- Sinusoid ---
@@ -288,18 +296,51 @@ impl EditorRunner {
                             if ui.slider("base_y##sin", -400.0_f32, 400.0, &mut sin.base_y) {
                                 sinusoid_changed = true;
                             }
+                            let sin_systems = systems_for("SinusoidComponent");
+                            if !sin_systems.is_empty() {
+                                ui.text_disabled(format!("  Used by: {sin_systems}"));
+                            }
                             if ui.small_button("Remove##rm_sin") {
                                 remove_sinusoid = true;
                             }
                             ui.separator();
-                        } else if ui.button("+ Sinusoid") {
-                            new_sinusoid = Some(SinusoidComponent {
-                                amplitude: 100.0,
-                                frequency: 1.0,
-                                phase: 0.0,
-                                base_y: 0.0,
-                            });
-                            sinusoid_changed = true;
+                        }
+
+                        // --- Add Component dropdown ---
+                        // Build list of component names not yet on this entity.
+                        if let Some(entity) = selected {
+                            let absent_indices: Vec<usize> = self
+                                .state
+                                .component_registry
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, d)| !(d.has)(&core.world, entity))
+                                .map(|(i, _)| i)
+                                .collect();
+
+                            if !absent_indices.is_empty() {
+                                let absent_names: Vec<&str> = absent_indices
+                                    .iter()
+                                    .map(|&i| self.state.component_registry[i].name)
+                                    .collect();
+
+                                // Clamp selection index to valid range.
+                                if self.state.add_component_selection >= absent_indices.len() {
+                                    self.state.add_component_selection = 0;
+                                }
+
+                                ui.combo_simple_string(
+                                    "##add_comp",
+                                    &mut self.state.add_component_selection,
+                                    &absent_names,
+                                );
+                                ui.same_line();
+                                if ui.button("Add Component") {
+                                    let registry_idx =
+                                        absent_indices[self.state.add_component_selection];
+                                    add_component_req = Some(registry_idx);
+                                }
+                            }
                         }
 
                         ui.separator();
@@ -312,7 +353,7 @@ impl EditorRunner {
             // Camera control via imgui IO (right-drag to pan, scroll to zoom)
             {
                 let io = ui.io();
-                if io.mouse_down[1] && !ui.is_any_item_active() {
+                if io.mouse_down[2] && !ui.is_any_item_active() {
                     cam_pan = io.mouse_delta;
                 }
                 let wheel = io.mouse_wheel;
@@ -355,9 +396,7 @@ impl EditorRunner {
         }
 
         if let Some(entity) = selected {
-            if remove_transform {
-                core.world.remove::<Transform>(entity);
-            } else if transform_changed {
+            if transform_changed {
                 if let Some(tf) = new_transform {
                     core.world.insert(entity, tf);
                 }
@@ -376,6 +415,13 @@ impl EditorRunner {
             } else if sinusoid_changed {
                 if let Some(s) = new_sinusoid {
                     core.world.insert(entity, s);
+                }
+            }
+
+            // Apply deferred "Add Component" from dropdown.
+            if let Some(idx) = add_component_req {
+                if let Some(desc) = self.state.component_registry.get(idx) {
+                    (desc.add)(&mut core.world, entity);
                 }
             }
         }

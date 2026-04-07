@@ -24,6 +24,7 @@ use winit::window::{Window, WindowAttributes, WindowId};
 
 use forge_ecs::app::AppCore;
 use forge_ecs::components::{Color, Shape, Tag, Transform, Velocity};
+use forge_ecs::scene::reload_scene;
 use forge_ecs::ecs::entity::Entity;
 use forge_ecs::ecs::resource::{DeltaTime, ElapsedTime};
 use forge_ecs::ecs::world::World;
@@ -31,7 +32,10 @@ use forge_ecs::math::Vec3;
 use forge_ecs::messaging::{LoopPhase, MessageBus};
 use forge_ecs::multiplayer;
 use forge_ecs::multiplayer::matchmaking::{self, LobbyState, MatchEvent, MatchRequest};
-use forge_ecs::multiplayer::{apply_snapshot, InputFrame, MatchSession, MatchState, NetworkEvent};
+use forge_ecs::multiplayer::{
+    apply_snapshot, capture_snapshot, state_hash, InputFrame, MatchSession, MatchState,
+    NetworkEvent, NetworkResource,
+};
 use forge_ecs::platform::{map_window_event, KeyCode, PlatformEvent};
 use forge_ecs::renderer::draw::DrawCommand;
 use forge_ecs::systems::{MovementSystem, SinusoidSystem};
@@ -45,7 +49,10 @@ const DEFAULT_GAMEPLAY_PORT: u16 = 7001;
 )]
 struct Cli {
     /// Matchmaker server address used by launcher and host/join modes.
-    #[arg(long, default_value = "127.0.0.1:7000")]
+    ///
+    /// Override with the `MATCHMAKER_ADDR` environment variable to target a
+    /// remote matchmaker without passing a CLI flag every run.
+    #[arg(long, default_value = "127.0.0.1:7000", env = "MATCHMAKER_ADDR")]
     matchmaker: String,
     /// Local UDP gameplay port advertised to peers (launcher + legacy auto-addr).
     #[arg(long, default_value_t = DEFAULT_GAMEPLAY_PORT)]
@@ -123,7 +130,12 @@ impl InputState {
 struct MultiplayerRuntime {
     session: MatchSession,
     tick_accumulator: f32,
+    /// Counts ticks since the last hash broadcast (host only).
+    hash_check_counter: u32,
 }
+
+/// How many ticks between host hash broadcasts for desync detection.
+const HASH_CHECK_INTERVAL: u32 = 30;
 
 #[derive(Debug, Clone, Copy)]
 struct PlayerColor {
@@ -167,6 +179,7 @@ enum LauncherScreen {
     CreateLobbyConfig,
     JoinLobbyCode,
     WaitingRoom,
+    SinglePlayerReady,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -215,6 +228,10 @@ struct LauncherRuntime {
     lobby_state: Option<LobbyState>,
     pending_request: Option<PendingRequest>,
     last_heartbeat: Instant,
+    /// Set when the user has requested single-player mode; checked in `about_to_wait`.
+    single_player_ready: bool,
+    /// Cached connection details for the reconnect button.
+    last_lobby_code: Option<String>,
 }
 
 impl LauncherRuntime {
@@ -237,6 +254,8 @@ impl LauncherRuntime {
             lobby_state: None,
             pending_request: None,
             last_heartbeat: Instant::now(),
+            single_player_ready: false,
+            last_lobby_code: None,
         }
     }
 
@@ -551,6 +570,9 @@ impl LauncherRuntime {
                     start_tick: 0,
                 };
 
+                // Cache the lobby code so the reconnect button can use it.
+                self.last_lobby_code = Some(state.lobby_code.clone());
+
                 match MatchSession::new_with_socket(
                     multiplayer::net_types::NetworkPolicy::default(),
                     state,
@@ -751,7 +773,9 @@ impl ApplicationHandler for GameApp {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
                 s.core.render_ctx.resize(size.width, size.height);
-                if s.scene_initialized {
+                // Only reposition in multiplayer — single-player entities should
+                // keep their positions across window resizes.
+                if s.scene_initialized && s.multiplayer.is_some() {
                     reposition_players(
                         &mut s.core.world,
                         &s.player_entities,
@@ -764,7 +788,7 @@ impl ApplicationHandler for GameApp {
             WindowEvent::ScaleFactorChanged { .. } => {
                 let size = s.core.platform.window.inner_size();
                 s.core.render_ctx.resize(size.width, size.height);
-                if s.scene_initialized {
+                if s.scene_initialized && s.multiplayer.is_some() {
                     reposition_players(
                         &mut s.core.world,
                         &s.player_entities,
@@ -804,7 +828,10 @@ impl ApplicationHandler for GameApp {
         }
 
         if let Some(launcher) = s.launcher.as_mut() {
-            if let Some(session) = launcher.update() {
+            if launcher.single_player_ready {
+                s.launcher = None;
+                initialize_single_player_scene(s);
+            } else if let Some(session) = launcher.update() {
                 initialize_multiplayer_scene(s, session);
                 s.launcher = None;
             }
@@ -870,7 +897,15 @@ fn prebind_gameplay_socket(
     gameplay_port: u16,
 ) -> io::Result<(UdpSocket, SocketAddr)> {
     let local_ip = resolve_local_interface_ip(matchmaker_addr)?;
-    let gameplay_socket = UdpSocket::bind(SocketAddr::new(local_ip, gameplay_port))?;
+    // Use port 0 to let the OS assign an available port, preventing collisions
+    // when multiple clients run on the same machine.  If an explicit port was
+    // provided (non-default) we still honour it.
+    let bind_port = if gameplay_port == DEFAULT_GAMEPLAY_PORT {
+        0
+    } else {
+        gameplay_port
+    };
+    let gameplay_socket = UdpSocket::bind(SocketAddr::new(local_ip, bind_port))?;
     let local_addr = gameplay_socket.local_addr()?;
     Ok((gameplay_socket, local_addr))
 }
@@ -889,9 +924,34 @@ fn resolve_or_default_game_addr(
 }
 
 fn initialize_single_player_scene(state: &mut DemoState) {
-    let (window_width, window_height) = current_viewport(&state.core);
-    let (player_entities, local_player_id) =
+    // Try to load the shared scene file; fall back to a hardcoded default if
+    // the file is missing so the game is always playable.
+    if let Err(e) = reload_scene(&mut state.core.world, "scene.json") {
+        println!("scene.json not found or invalid ({e}), spawning default player");
+        let (window_width, window_height) = current_viewport(&state.core);
         setup_single_player_scene(&mut state.core.world, window_width, window_height);
+    }
+
+    // Find the player entity by Tag "player"; fall back to any entity with Velocity.
+    let player_entity = state
+        .core
+        .world
+        .query::<Tag>()
+        .find(|(_, tag)| tag.as_str() == "player")
+        .map(|(e, _)| e)
+        .or_else(|| {
+            state
+                .core
+                .world
+                .query::<Velocity>()
+                .next()
+                .map(|(e, _)| e)
+        });
+
+    let local_player_id = 1_u64;
+    let player_entities: Vec<(u64, Entity)> = player_entity
+        .map(|e| vec![(local_player_id, e)])
+        .unwrap_or_default();
 
     state.player_slots = player_entities
         .iter()
@@ -923,9 +983,20 @@ fn initialize_multiplayer_scene(state: &mut DemoState, session: MatchSession) {
         .collect();
     state.player_entities = player_entities;
     state.local_player_id = local_player_id;
+
+    // Register NetworkResource so game systems can read network events.
+    let is_host = session.is_host();
+    state.core.world.insert_resource(NetworkResource {
+        pending_events: Vec::new(),
+        local_peer_id: local_player_id,
+        is_host,
+        outbound_input: None,
+    });
+
     state.multiplayer = Some(MultiplayerRuntime {
         session,
         tick_accumulator: 0.0,
+        hash_check_counter: 0,
     });
     state.scene_initialized = true;
 
@@ -974,6 +1045,21 @@ fn draw_launcher_ui(ui: &imgui::Ui, launcher: &mut LauncherRuntime) {
                     if ui.button("Connect") {
                         launcher.connect();
                     }
+                    ui.same_line();
+                    if ui.button("Single Player") {
+                        launcher.screen = LauncherScreen::SinglePlayerReady;
+                    }
+
+                    // Show Reconnect only if a previous session exists.
+                    if let Some(last_code) = launcher.last_lobby_code.clone() {
+                        ui.separator();
+                        ui.text(format!("Previous lobby: {last_code}"));
+                        if ui.button("Reconnect") {
+                            launcher.join_code_input = last_code;
+                            launcher.connect(); // Connect to matchmaker first.
+                            launcher.screen = LauncherScreen::JoinLobbyCode;
+                        }
+                    }
                 }
                 LauncherScreen::LobbyChoice => {
                     ui.text("Connected. Choose a lobby action.");
@@ -1016,6 +1102,16 @@ fn draw_launcher_ui(ui: &imgui::Ui, launcher: &mut LauncherRuntime) {
                     if ui.button("Back") {
                         launcher.screen = LauncherScreen::LobbyChoice;
                         launcher.error_message.clear();
+                    }
+                }
+                LauncherScreen::SinglePlayerReady => {
+                    ui.text("Single Player");
+                    ui.text("Loads scene.json and starts the game locally.");
+                    if ui.button("Play") {
+                        launcher.single_player_ready = true;
+                    }
+                    if ui.button("Back") {
+                        launcher.screen = LauncherScreen::Connect;
                     }
                 }
                 LauncherScreen::WaitingRoom => {
@@ -1290,7 +1386,14 @@ fn apply_multiplayer_tick(
         let _ = apply_player_velocity(world, player_entities, local_player_id, move_x, move_y);
 
         runtime.session.tick();
+        let current_tick = runtime.session.current_tick();
         let events = runtime.session.drain_network_events();
+
+        // Populate NetworkResource so systems can consume events this tick.
+        if let Some(net_res) = world.resource_mut::<NetworkResource>() {
+            net_res.pending_events = events.clone();
+        }
+
         for event in events {
             match event {
                 NetworkEvent::CorrectionReceived { snapshot, .. } => {
@@ -1307,6 +1410,31 @@ fn apply_multiplayer_tick(
                         apply_player_velocity(world, player_entities, player_id, move_x, move_y);
                 }
                 NetworkEvent::HashMismatch { .. } => {}
+                NetworkEvent::HostHashReceived { tick, host_hash } => {
+                    // Client: compare host hash against local state at the same tick.
+                    // On mismatch, request a correction by checking with host.
+                    let local = state_hash(world, tick);
+                    if local != host_hash {
+                        println!(
+                            "[client] hash mismatch at tick {tick}: local={local:#x} host={host_hash:#x}"
+                        );
+                        // The host will send a HostCorrection which we'll apply next tick.
+                    }
+                }
+            }
+        }
+
+        // Host: periodically broadcast state hash for desync detection.
+        if runtime.session.is_host() {
+            runtime.hash_check_counter += 1;
+            if runtime.hash_check_counter >= HASH_CHECK_INTERVAL {
+                runtime.hash_check_counter = 0;
+                let hash = state_hash(world, current_tick);
+                runtime.session.broadcast_hash(current_tick, hash);
+
+                // Also send a correction so clients can reconcile immediately.
+                let snapshot = capture_snapshot(world, current_tick);
+                runtime.session.send_correction(current_tick, snapshot);
             }
         }
     }

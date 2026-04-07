@@ -3,7 +3,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use crate::components::Transform;
+use crate::components::{Camera, Transform};
 use crate::ecs::world::World;
 
 use super::net_types::EntityStatePacket;
@@ -13,9 +13,13 @@ use super::net_types::{NetworkTick, Snapshot};
 pub type FrameHash = u64;
 
 /// Deterministically hash all `Transform` component data in a world.
+///
+/// Camera entities are excluded because each player has an independent camera
+/// — including them would cause spurious desync detections.
 pub fn state_hash(world: &World, _tick: NetworkTick) -> FrameHash {
     let mut transforms: Vec<_> = world
         .query::<Transform>()
+        .filter(|(entity, _)| world.get::<Camera>(*entity).is_none())
         .map(|(entity, transform)| {
             (
                 entity,
@@ -54,11 +58,15 @@ pub fn state_hash(world: &World, _tick: NetworkTick) -> FrameHash {
 }
 
 /// Build a full transform snapshot from authoritative state.
+///
+/// Camera entities are excluded from snapshots — each player manages their
+/// own camera independently.
 pub fn capture_snapshot(world: &World, tick: NetworkTick) -> Snapshot {
     let mut entities = Vec::new();
 
     let mut list: Vec<_> = world
         .query::<Transform>()
+        .filter(|(entity, _)| world.get::<Camera>(*entity).is_none())
         .map(|(entity, transform)| EntityStatePacket::from((entity, transform)))
         .collect();
 

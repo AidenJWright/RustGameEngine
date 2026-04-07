@@ -274,6 +274,28 @@ impl MatchSession {
         }
     }
 
+    /// Broadcast a state hash to all peers (host only).
+    pub fn broadcast_hash(&mut self, tick: NetworkTick, hash: u64) {
+        let message = NetMessage::HostHash { tick, hash };
+        let payload = encode_message(&message);
+        if let Ok(payload) = payload {
+            self.peers.iter().for_each(|(_, peer_addr)| {
+                let _ = self.socket.send_to(&payload, peer_addr);
+            });
+        }
+    }
+
+    /// Send an authoritative correction snapshot to all peers (host only).
+    pub fn send_correction(&mut self, tick: NetworkTick, snapshot: super::net_types::Snapshot) {
+        let message = NetMessage::HostCorrection { tick, snapshot };
+        let payload = encode_message(&message);
+        if let Ok(payload) = payload {
+            self.peers.iter().for_each(|(_, peer_addr)| {
+                let _ = self.socket.send_to(&payload, peer_addr);
+            });
+        }
+    }
+
     fn send_input_to_host(&mut self, input: PlayerInputFrame) {
         if let Some(host_addr) = self.host_addr {
             let message = NetMessage::Input(input);
@@ -308,8 +330,11 @@ impl MatchSession {
                                 self.event_queue
                                     .push_back(NetworkEvent::InputReceived(frame));
                             }
-                            NetMessage::HostHash { .. } => {
-                                // Reserved for a later phase where we compare local/remote hashes.
+                            NetMessage::HostHash { tick, hash } => {
+                                self.event_queue.push_back(NetworkEvent::HostHashReceived {
+                                    tick,
+                                    host_hash: hash,
+                                });
                             }
                             NetMessage::HostCorrection { tick, snapshot } => {
                                 self.event_queue

@@ -7,33 +7,24 @@
 //!    `y = base_y + amplitude * sin(frequency * elapsed + phase)`.
 //! 4. Queue `CommandBuffer::insert` with the updated transform.
 
-use crate::components::Transform;
+use crate::components::{SinusoidComponent, Transform};
 use crate::ecs::command_buffer::CommandBuffer;
-use crate::ecs::component::Component;
 use crate::ecs::resource::ElapsedTime;
 use crate::ecs::system::System;
 use crate::ecs::world::World;
-use serde::{Deserialize, Serialize};
-
-/// Data component that drives sinusoidal Y motion.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SinusoidComponent {
-    /// Peak displacement from `base_y` in world units.
-    pub amplitude: f32,
-    /// Oscillations per second.
-    pub frequency: f32,
-    /// Phase offset in radians.
-    pub phase: f32,
-    /// The Y position the entity rests at when `sin = 0`.
-    pub base_y: f32,
-}
-
-impl Component for SinusoidComponent {}
+use crate::messaging::LoopPhase;
 
 /// Applies sinusoidal Y motion to entities that have both
 /// [`Transform`] and [`SinusoidComponent`].
 #[derive(Debug, Default)]
 pub struct SinusoidSystem;
+
+impl SinusoidSystem {
+    /// Recommended registration phase for this system.
+    pub const PHASE: LoopPhase = LoopPhase::Update;
+    /// Recommended registration priority for this system.
+    pub const PRIORITY: i32 = 0;
+}
 
 impl System for SinusoidSystem {
     fn run(&self, world: &World, commands: &mut CommandBuffer) {

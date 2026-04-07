@@ -9,10 +9,18 @@ use crate::components::Health;
 use crate::ecs::command_buffer::CommandBuffer;
 use crate::ecs::system::System;
 use crate::ecs::world::World;
+use crate::messaging::LoopPhase;
 
 /// Despawns any entity whose `Health::current` is ≤ 0.
 #[derive(Debug, Default)]
 pub struct HealthSystem;
+
+impl HealthSystem {
+    /// Recommended registration phase for this system.
+    pub const PHASE: LoopPhase = LoopPhase::Update;
+    /// Recommended registration priority for this system.
+    pub const PRIORITY: i32 = 10;
+}
 
 impl System for HealthSystem {
     fn run(&self, world: &World, commands: &mut CommandBuffer) {

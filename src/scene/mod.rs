@@ -2,4 +2,4 @@
 
 pub mod data;
 
-pub use data::{load_scene, save_scene, EntityData, SceneData};
+pub use data::{clear_world, load_scene, reload_scene, save_scene, EntityData, SceneData};

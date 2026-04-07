@@ -4,10 +4,9 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::components::{Color, Health, Shape, Tag, Transform, Velocity};
+use crate::components::{Camera, Color, Health, Shape, SinusoidComponent, Tag, Transform, Velocity};
 use crate::ecs::entity::Entity;
 use crate::ecs::world::World;
-use crate::systems::sinusoid::SinusoidComponent;
 
 // ---------------------------------------------------------------------------
 // Entity ID encoding
@@ -39,6 +38,8 @@ pub struct EntityData {
     pub velocity: Option<Velocity>,
     pub health: Option<Health>,
     pub sinusoid: Option<SinusoidComponent>,
+    /// Camera is saved/loaded but excluded from network snapshots.
+    pub camera: Option<Camera>,
 }
 
 /// Top-level scene file format.
@@ -74,6 +75,7 @@ pub fn save_scene(world: &World, path: &str) -> std::io::Result<()> {
                 velocity: world.get::<Velocity>(entity).cloned(),
                 health: world.get::<Health>(entity).cloned(),
                 sinusoid: world.get::<SinusoidComponent>(entity).cloned(),
+                camera: world.get::<Camera>(entity).cloned(),
             });
         });
     }
@@ -90,6 +92,27 @@ pub fn save_scene(world: &World, path: &str) -> std::io::Result<()> {
 // ---------------------------------------------------------------------------
 // Load
 // ---------------------------------------------------------------------------
+
+/// Despawn every entity currently in the world, leaving it empty.
+///
+/// Operates on root entities only; despawning a root recursively removes all
+/// its children via the existing scene-tree logic.
+pub fn clear_world(world: &mut World) {
+    let roots: Vec<Entity> = world.scene_tree().root_entities().collect();
+    for e in roots {
+        world.despawn(e);
+    }
+}
+
+/// Clear the world and then load a scene from `path`.
+///
+/// Equivalent to `clear_world(world)` followed by `load_scene(world, path)`.
+/// Use this instead of bare `load_scene` when you want a clean slate (e.g.,
+/// starting a new game session or loading a fresh level).
+pub fn reload_scene(world: &mut World, path: &str) -> std::io::Result<()> {
+    clear_world(world);
+    load_scene(world, path)
+}
 
 /// Deserialise a scene JSON file and spawn its entities into `world`.
 ///
@@ -121,9 +144,11 @@ pub fn load_scene(world: &mut World, path: &str) -> std::io::Result<()> {
         if let Some(c) = data.tag.clone() {
             world.insert(entity, c);
         }
-        if let Some(c) = data.transform.clone() {
-            world.insert(entity, c);
-        }
+        // Transform is guaranteed on every entity.
+        world.insert(
+            entity,
+            data.transform.clone().unwrap_or_else(Transform::identity),
+        );
         if let Some(c) = data.color.clone() {
             world.insert(entity, c);
         }
@@ -137,6 +162,9 @@ pub fn load_scene(world: &mut World, path: &str) -> std::io::Result<()> {
             world.insert(entity, c);
         }
         if let Some(c) = data.sinusoid.clone() {
+            world.insert(entity, c);
+        }
+        if let Some(c) = data.camera.clone() {
             world.insert(entity, c);
         }
     }

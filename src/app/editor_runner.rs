@@ -86,8 +86,15 @@ impl EditorRunner {
     fn render(&mut self, core: &mut AppCore) {
         core.render_ctx.sync_with_window(core.platform.window());
 
-        let w = core.render_ctx.surface_config.width as f32;
-        let h = core.render_ctx.surface_config.height as f32;
+        let surface_w = core.render_ctx.surface_config.width as f32;
+        let surface_h = core.render_ctx.surface_config.height as f32;
+
+        // Viewport is the area left of the inspector panel and below the toolbar.
+        // Shapes are rendered into this region, not the full surface.
+        let toolbar_h = 30.0_f32;
+        let status_h  = 22.0_f32;
+        let viewport_w = (surface_w - self.state.inspector_width).max(1.0);
+        let viewport_h = (surface_h - toolbar_h - status_h).max(1.0);
 
         // --- 1. Build scene draw-commands with camera transform ---
         let draw_cmds: Vec<DrawCommand> = core
@@ -95,7 +102,7 @@ impl EditorRunner {
             .query3::<Transform, Shape, Color>()
             .map(|(_, t, s, c)| {
                 let raw = make_draw_cmd(t, s, c); // world-origin coords
-                self.state.camera.transform_draw_cmd(raw, w, h)
+                self.state.camera.transform_draw_cmd(raw, viewport_w, viewport_h)
             })
             .collect();
         for cmd in draw_cmds {
@@ -186,10 +193,50 @@ impl EditorRunner {
         {
             let ui = core.imgui.begin_frame(&core.platform.window);
 
+            // Main dockspace (enables real docking behavior for panels).
+            //
+            // imgui-rs doesn't expose docking as safe wrappers here, so we use
+            // the low-level imgui::sys API.
+            let dockspace_id = ui.new_id_str("##main_dockspace");
+            let dockspace_u32: u32 = unsafe { std::mem::transmute::<imgui::Id, u32>(dockspace_id) };
+            let _ = dockspace_u32; // used only for igDockSpace call below
+
+            // Use ImGui's logical display size for layout/docking math (important on HiDPI).
+            let display_w = ui.io().display_size[0];
+            let display_h = ui.io().display_size[1];
+
+            // Keep dockspace below toolbar and above status bar.
+            let toolbar_h = 30.0_f32;
+            let status_h = 22.0_f32;
+            let dock_pos = [0.0, toolbar_h];
+            let dock_size = [display_w, (display_h - toolbar_h - status_h).max(1.0)];
+
+            ui.window("##dockspace_host")
+                .no_decoration()
+                .draw_background(false)
+                .position(dock_pos, imgui::Condition::Always)
+                .size(dock_size, imgui::Condition::Always)
+                .flags(
+                    imgui::WindowFlags::NO_SAVED_SETTINGS
+                        | imgui::WindowFlags::NO_MOVE
+                        | imgui::WindowFlags::NO_BRING_TO_FRONT_ON_FOCUS
+                        | imgui::WindowFlags::NO_NAV_FOCUS,
+                )
+                .build(|| unsafe {
+                    // Create the dockspace — panels can be freely dragged and
+                    // docked anywhere inside it.
+                    imgui::sys::igDockSpace(
+                        dockspace_u32,
+                        imgui::sys::ImVec2 { x: 0.0, y: 0.0 },
+                        0,
+                        std::ptr::null(),
+                    );
+                });
+
             // Toolbar
             ui.window("##toolbar")
                 .no_decoration()
-                .size([w, 30.0], imgui::Condition::Always)
+                .size([display_w, toolbar_h], imgui::Condition::Always)
                 .position([0.0, 0.0], imgui::Condition::Always)
                 .build(|| {
                     if ui.button("Save") {
@@ -213,8 +260,8 @@ impl EditorRunner {
 
             // Hierarchy panel — drag-and-drop to reorder / reparent.
             ui.window("Scene Hierarchy")
-                .size([210.0, h - 55.0], imgui::Condition::Always)
-                .position([0.0, 30.0], imgui::Condition::Always)
+                .position([0.0, toolbar_h], imgui::Condition::FirstUseEver)
+                .size([180.0, dock_size[1]], imgui::Condition::FirstUseEver)
                 .build(|| {
                     for (entity, label) in &hierarchy {
                         let is_sel = new_selected == Some(*entity);
@@ -272,29 +319,24 @@ impl EditorRunner {
                 });
 
             // Inspector panel.
-            // Position is anchored to the right edge every frame.
-            // Size uses FirstUseEver so the user can resize the panel; the width
-            // is read back each frame via `ui.window_size()` to keep the anchor correct.
-            let insp_x = (w - self.state.inspector_width - 10.0).max(220.0);
-            if selected.is_some() {
-                ui.window("Inspector")
-                    .size(
-                        [self.state.inspector_width, h - 55.0],
-                        imgui::Condition::FirstUseEver,
-                    )
-                    .position([insp_x, 30.0], imgui::Condition::Always)
-                    .flags(
-                        imgui::WindowFlags::NO_SAVED_SETTINGS
-                            | imgui::WindowFlags::NO_MOVE,
-                    )
-                    .build(|| {
-                        // Read back actual width so we can update the anchor next frame.
-                        captured_inspector_width = ui.window_size()[0];
+            ui.window("Inspector")
+                .position([display_w - self.state.inspector_width, toolbar_h], imgui::Condition::FirstUseEver)
+                .size(
+                    [self.state.inspector_width, (display_h - toolbar_h - status_h).max(1.0)],
+                    imgui::Condition::FirstUseEver,
+                )
+                .flags(imgui::WindowFlags::NO_SAVED_SETTINGS)
+                .build(|| {
+                    // Read back actual width so we can update the anchor next frame.
+                    captured_inspector_width = ui.window_size()[0];
 
-                        if let Some(entity) = selected {
-                            ui.text(format!("{entity}"));
-                            ui.separator();
-                        }
+                    if let Some(entity) = selected {
+                        ui.text(format!("{entity}"));
+                        ui.separator();
+                    } else {
+                        ui.text_disabled("No entity selected.");
+                        ui.separator();
+                    }
 
                         // Helper: collect system names that read a given component.
                         let systems_for = |comp: &str| -> String {
@@ -513,13 +555,12 @@ impl EditorRunner {
                         if ui.button("Despawn Entity") {
                             despawn_req = true;
                         }
-                    });
-            }
+                });
 
             // Camera control via imgui IO (middle-drag to pan, scroll to zoom)
             {
                 let io = ui.io();
-                if io.mouse_down[2] && !ui.is_any_item_active() {
+                if (io.mouse_down[2] || io.mouse_down[1]) && !ui.is_any_item_active() {
                     cam_pan = io.mouse_delta;
                 }
                 let wheel = io.mouse_wheel;
@@ -533,8 +574,8 @@ impl EditorRunner {
                 let msg = self.state.status_message.clone();
                 ui.window("##status")
                     .no_decoration()
-                    .size([w, 22.0], imgui::Condition::Always)
-                    .position([0.0, h - 22.0], imgui::Condition::Always)
+                    .size([display_w, status_h], imgui::Condition::Always)
+                    .position([0.0, display_h - status_h], imgui::Condition::Always)
                     .build(|| {
                         ui.text(&msg);
                     });

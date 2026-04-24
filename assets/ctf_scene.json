@@ -162,7 +162,7 @@
     {
       "id": 20,
       "parent": 0,
-      "tag": "p1_flag",
+      "tag": "ctf_flag_red",
       "transform": { "position": { "x": 160.0, "y": 360.0, "z": 5.0 }, "rotation": 0.0, "scale": { "x": 1.0, "y": 1.0, "z": 1.0 } },
       "shape": { "Circle": { "radius": 12.0 } },
       "color": { "r": 1.0, "g": 0.05, "b": 0.05, "a": 1.0 }
@@ -170,7 +170,7 @@
     {
       "id": 21,
       "parent": 0,
-      "tag": "p2_flag",
+      "tag": "ctf_flag_blue",
       "transform": { "position": { "x": 1120.0, "y": 360.0, "z": 5.0 }, "rotation": 0.0, "scale": { "x": 1.0, "y": 1.0, "z": 1.0 } },
       "shape": { "Circle": { "radius": 12.0 } },
       "color": { "r": 0.05, "g": 0.22, "b": 1.0, "a": 1.0 }
@@ -178,14 +178,45 @@
     {
       "id": 22,
       "parent": 0,
-      "tag": "p1_spawn",
-      "transform": { "position": { "x": 160.0, "y": 360.0, "z": 0.0 }, "rotation": 0.0, "scale": { "x": 1.0, "y": 1.0, "z": 1.0 } }
+      "tag": "ctf_player_red_1",
+      "transform": { "position": { "x": 160.0, "y": 320.0, "z": 10.0 }, "rotation": 1.5707964, "scale": { "x": 1.0, "y": 1.0, "z": 1.0 } },
+      "shape": { "Triangle": { "size": 40.0 } },
+      "color": { "r": 1.0, "g": 0.18, "b": 0.18, "a": 1.0 },
+      "velocity": { "dx": 0.0, "dy": 0.0 }
     },
     {
       "id": 23,
       "parent": 0,
-      "tag": "p2_spawn",
-      "transform": { "position": { "x": 1120.0, "y": 360.0, "z": 0.0 }, "rotation": 0.0, "scale": { "x": 1.0, "y": 1.0, "z": 1.0 } }
+      "tag": "ctf_player_red_2",
+      "transform": { "position": { "x": 160.0, "y": 400.0, "z": 10.0 }, "rotation": 1.5707964, "scale": { "x": 1.0, "y": 1.0, "z": 1.0 } },
+      "shape": { "Triangle": { "size": 40.0 } },
+      "color": { "r": 1.0, "g": 0.32, "b": 0.32, "a": 1.0 },
+      "velocity": { "dx": 0.0, "dy": 0.0 }
+    },
+    {
+      "id": 24,
+      "parent": 0,
+      "tag": "ctf_player_blue_1",
+      "transform": { "position": { "x": 1120.0, "y": 320.0, "z": 10.0 }, "rotation": -1.5707964, "scale": { "x": 1.0, "y": 1.0, "z": 1.0 } },
+      "shape": { "Triangle": { "size": 40.0 } },
+      "color": { "r": 0.18, "g": 0.44, "b": 1.0, "a": 1.0 },
+      "velocity": { "dx": 0.0, "dy": 0.0 }
+    },
+    {
+      "id": 25,
+      "parent": 0,
+      "tag": "ctf_player_blue_2",
+      "transform": { "position": { "x": 1120.0, "y": 400.0, "z": 10.0 }, "rotation": -1.5707964, "scale": { "x": 1.0, "y": 1.0, "z": 1.0 } },
+      "shape": { "Triangle": { "size": 40.0 } },
+      "color": { "r": 0.34, "g": 0.56, "b": 1.0, "a": 1.0 },
+      "velocity": { "dx": 0.0, "dy": 0.0 }
+    },
+    {
+      "id": 26,
+      "parent": 0,
+      "tag": "ctf_camera",
+      "transform": { "position": { "x": 640.0, "y": 360.0, "z": 0.0 }, "rotation": 0.0, "scale": { "x": 1.0, "y": 1.0, "z": 1.0 } },
+      "camera": { "position": { "x": 0.0, "y": 0.0 }, "zoom": 1.0 }
     }
   ]
 }

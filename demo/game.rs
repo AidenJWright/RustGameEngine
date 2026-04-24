@@ -27,13 +27,23 @@ use forge_ecs::scene::reload_scene;
 use forge_ecs::ecs::entity::Entity;
 use forge_ecs::ecs::resource::{DeltaTime, ElapsedTime, KeysPressed};
 use forge_ecs::ecs::world::World;
+use forge_ecs::game::ctf::resources::{ControlState, CtfInputState, CtfSyncState};
+use forge_ecs::game::ctf::setup::{ctf_camera_entity, setup_ctf_scene_entities};
+use forge_ecs::game::ctf::systems::hud::draw_hud as draw_ctf_hud;
+use forge_ecs::game::ctf::systems::{
+    CtfInputSystem, FlagCarrySystem, FlagPickupSystem, StopOnWinSystem, WallCollisionSystem,
+    WinConditionSystem,
+};
+use forge_ecs::game::ctf::{ACTION_SWITCH, ACTION_TAG, SWITCH_KEY};
 use forge_ecs::math::Vec3;
 use forge_ecs::messaging::{LoopPhase, MessageBus};
 use forge_ecs::multiplayer;
-use forge_ecs::multiplayer::matchmaking::{self, LobbyState, MatchEvent, MatchRequest};
+use forge_ecs::multiplayer::matchmaking::{
+    self, CtfSlot, CtfSlotAssignment, GameMode, LobbyState, MatchEvent, MatchRequest,
+};
 use forge_ecs::multiplayer::{
     apply_snapshot, capture_snapshot, state_hash, InputFrame, MatchSession, MatchState,
-    NetworkEvent, NetworkResource,
+    NetworkEvent, NetworkResource, DEFAULT_SNAPSHOT_STRIDE,
 };
 use forge_ecs::platform::{
     map_window_event, KeyCode, MouseButton as EngineMouseButton, PlatformEvent,
@@ -104,6 +114,7 @@ fn key_discriminant(code: KeyCode) -> Option<u32> {
         KeyCode::D => Some(7),
         KeyCode::Space => Some(8),
         KeyCode::Return => Some(9),
+        KeyCode::LeftShift => Some(10),
         _ => None,
     }
 }
@@ -145,6 +156,32 @@ fn compute_movement_default(keys: &KeysPressed) -> (f32, f32) {
     } else {
         (raw_x, raw_y)
     }
+}
+
+fn compute_ctf_input(keys: &KeysPressed) -> (f32, f32, u8) {
+    let left = keys.is_held(0) || keys.is_held(5);
+    let right = keys.is_held(1) || keys.is_held(7);
+    let up = keys.is_held(2) || keys.is_held(4);
+    let down = keys.is_held(3) || keys.is_held(6);
+
+    let raw_x = (if right { 1.0_f32 } else { 0.0 }) - (if left { 1.0_f32 } else { 0.0 });
+    let raw_y = (if down { 1.0_f32 } else { 0.0 }) - (if up { 1.0_f32 } else { 0.0 });
+    let len = (raw_x * raw_x + raw_y * raw_y).sqrt();
+    let (move_x, move_y) = if len > 1.0 {
+        (raw_x / len, raw_y / len)
+    } else {
+        (raw_x, raw_y)
+    };
+
+    let mut action_bits = 0_u8;
+    if keys.is_held(8) || keys.is_held(9) {
+        action_bits |= ACTION_TAG;
+    }
+    if keys.is_held(SWITCH_KEY) {
+        action_bits |= ACTION_SWITCH;
+    }
+
+    (move_x, move_y, action_bits)
 }
 
 #[derive(Debug)]
@@ -209,6 +246,7 @@ enum PendingRequest {
     CreateLobby { sent_at: Instant },
     JoinLobby { sent_at: Instant },
     StartMatch { sent_at: Instant },
+    UpdateCtfAssignments { sent_at: Instant },
 }
 
 impl PendingRequest {
@@ -217,7 +255,8 @@ impl PendingRequest {
             Self::Ping { sent_at }
             | Self::CreateLobby { sent_at }
             | Self::JoinLobby { sent_at }
-            | Self::StartMatch { sent_at } => sent_at,
+            | Self::StartMatch { sent_at }
+            | Self::UpdateCtfAssignments { sent_at } => sent_at,
         }
     }
 
@@ -227,6 +266,7 @@ impl PendingRequest {
             Self::CreateLobby { .. } => "create lobby",
             Self::JoinLobby { .. } => "join lobby",
             Self::StartMatch { .. } => "start match",
+            Self::UpdateCtfAssignments { .. } => "update CTF assignments",
         }
     }
 }
@@ -237,6 +277,7 @@ struct LauncherRuntime {
     matchmaker_input: String,
     join_code_input: String,
     target_players: u8,
+    game_mode: GameMode,
     status_message: String,
     error_message: String,
     connected_matchmaker: Option<SocketAddr>,
@@ -263,6 +304,7 @@ impl LauncherRuntime {
             matchmaker_input: default_matchmaker,
             join_code_input: String::new(),
             target_players: 2,
+            game_mode: GameMode::DefaultScene,
             status_message: "Enter username and matchmaker address.".to_string(),
             error_message: String::new(),
             connected_matchmaker: None,
@@ -355,8 +397,10 @@ impl LauncherRuntime {
             return;
         };
 
-        if !(1..=4).contains(&self.target_players) {
-            self.error_message = "Target players must be between 1 and 4.".to_string();
+        let min_players = if self.game_mode == GameMode::CaptureTheFlag { 2 } else { 1 };
+        if !(min_players..=4).contains(&self.target_players) {
+            self.error_message =
+                format!("Target players must be between {min_players} and 4.");
             return;
         }
 
@@ -373,6 +417,7 @@ impl LauncherRuntime {
             player_name: self.username_input.trim().to_string(),
             game_addr: local_addr.to_string(),
             target_players: self.target_players,
+            game_mode: self.game_mode,
         };
 
         if let Err(error) = self.send_request(request) {
@@ -475,6 +520,42 @@ impl LauncherRuntime {
         self.status_message = "Start request sent.".to_string();
     }
 
+    fn update_ctf_assignments(&mut self, assignments: Vec<CtfSlotAssignment>) {
+        self.error_message.clear();
+
+        if self.pending_request.is_some() {
+            return;
+        }
+
+        if !self.is_host() {
+            self.error_message = "Only the host can update CTF slots.".to_string();
+            return;
+        }
+
+        let Some(lobby_code) = self.lobby_code.clone() else {
+            self.error_message = "No active lobby.".to_string();
+            return;
+        };
+        let Some(client_id) = self.local_player_id else {
+            self.error_message = "Missing local player id.".to_string();
+            return;
+        };
+
+        if let Err(error) = self.send_request(MatchRequest::UpdateCtfAssignments {
+            lobby_code,
+            client_id,
+            assignments,
+        }) {
+            self.error_message = format!("CTF assignment update failed: {error}");
+            return;
+        }
+
+        self.pending_request = Some(PendingRequest::UpdateCtfAssignments {
+            sent_at: Instant::now(),
+        });
+        self.status_message = "CTF assignments updated.".to_string();
+    }
+
     fn update(&mut self) -> Option<MatchSession> {
         self.check_pending_timeout();
         self.maybe_send_heartbeat();
@@ -559,6 +640,12 @@ impl LauncherRuntime {
             }
             MatchEvent::LobbyUpdated { lobby_code, lobby } => {
                 if self.lobby_code.as_deref() == Some(lobby_code.as_str()) {
+                    if matches!(
+                        self.pending_request,
+                        Some(PendingRequest::UpdateCtfAssignments { .. })
+                    ) {
+                        self.pending_request = None;
+                    }
                     self.lobby_state = Some(lobby);
                 }
             }
@@ -567,6 +654,8 @@ impl LauncherRuntime {
                 host_client_id,
                 seed,
                 player_endpoints,
+                game_mode,
+                ctf_assignments,
             } => {
                 let Some(local_player_id) = self.local_player_id else {
                     self.error_message =
@@ -589,6 +678,8 @@ impl LauncherRuntime {
                     shared_seed: seed,
                     players: player_endpoints,
                     start_tick: 0,
+                    game_mode,
+                    ctf_assignments,
                 };
 
                 // Cache the lobby code so the reconnect button can use it.
@@ -687,6 +778,7 @@ struct DemoState {
     multiplayer: Option<MultiplayerRuntime>,
     launcher: Option<LauncherRuntime>,
     scene_initialized: bool,
+    game_mode: GameMode,
     /// Camera entity that tracks the local player's position.
     camera_entity: Option<Entity>,
     /// Manual camera offset from the followed player, controlled by middle-drag.
@@ -744,6 +836,7 @@ impl ApplicationHandler for GameApp {
             multiplayer: None,
             launcher: None,
             scene_initialized: false,
+            game_mode: GameMode::DefaultScene,
             camera_entity: None,
             camera_pan: Vec3::ZERO,
             camera_middle_dragging: false,
@@ -766,7 +859,11 @@ impl ApplicationHandler for GameApp {
                 initialize_single_player_scene(&mut state);
             }
             StartupMode::LegacySession(session) => {
-                initialize_multiplayer_scene(&mut state, session);
+                if session.game_mode() == GameMode::CaptureTheFlag {
+                    initialize_multiplayer_ctf_scene(&mut state, session);
+                } else {
+                    initialize_multiplayer_scene(&mut state, session);
+                }
             }
         }
 
@@ -896,7 +993,11 @@ impl ApplicationHandler for GameApp {
                 s.launcher = None;
                 initialize_single_player_scene(s);
             } else if let Some(session) = launcher.update() {
-                initialize_multiplayer_scene(s, session);
+                if session.game_mode() == GameMode::CaptureTheFlag {
+                    initialize_multiplayer_ctf_scene(s, session);
+                } else {
+                    initialize_multiplayer_scene(s, session);
+                }
                 s.launcher = None;
             }
         }
@@ -909,20 +1010,17 @@ impl ApplicationHandler for GameApp {
                     &mut s.core.world,
                     s.local_player_id,
                     &s.player_entities,
+                    s.game_mode,
                 );
             }
             // Single-player movement is handled by PlayerInputSystem via bus.
 
             s.bus.run_frame(&mut s.core.world);
+            send_ctf_dirty_snapshot(s);
 
             // Move camera to follow the local player each frame.
             if let Some(cam_entity) = s.camera_entity {
-                let player_pos = s
-                    .player_entities
-                    .iter()
-                    .find(|(id, _)| *id == s.local_player_id)
-                    .and_then(|(_, entity)| s.core.world.get::<Transform>(*entity).cloned())
-                    .map(|tf| tf.position);
+                let player_pos = local_follow_position(s);
 
                 if let Some(pos) = player_pos {
                     if let Some(cam_tf) = s.core.world.get_mut::<Transform>(cam_entity) {
@@ -982,6 +1080,60 @@ fn prebind_gameplay_socket(
     Ok((gameplay_socket, local_addr))
 }
 
+fn local_follow_position(state: &DemoState) -> Option<Vec3> {
+    if state.game_mode == GameMode::CaptureTheFlag {
+        let selected_slot = state
+            .core
+            .world
+            .resource::<ControlState>()?
+            .controls
+            .iter()
+            .find(|control| control.client_id == state.local_player_id)?
+            .selected_slot;
+        let refs = state.core.world.resource::<forge_ecs::game::ctf::resources::EntityRefs>()?;
+        return state
+            .core
+            .world
+            .get::<Transform>(refs.player(selected_slot))
+            .map(|tf| tf.position);
+    }
+
+    state
+        .player_entities
+        .iter()
+        .find(|(id, _)| *id == state.local_player_id)
+        .and_then(|(_, entity)| state.core.world.get::<Transform>(*entity).cloned())
+        .map(|tf| tf.position)
+}
+
+fn send_ctf_dirty_snapshot(state: &mut DemoState) {
+    if state.game_mode != GameMode::CaptureTheFlag {
+        return;
+    }
+    let Some(multiplayer) = state.multiplayer.as_mut() else {
+        return;
+    };
+    if !multiplayer.session.is_host() {
+        return;
+    }
+    let dirty = state
+        .core
+        .world
+        .resource::<CtfSyncState>()
+        .is_some_and(|sync| sync.dirty);
+    if !dirty {
+        return;
+    }
+
+    let tick = multiplayer.session.current_tick();
+    let snapshot = capture_snapshot(&state.core.world, tick);
+    multiplayer.session.send_correction(tick, snapshot);
+    state
+        .core
+        .world
+        .insert_resource(CtfSyncState { dirty: false });
+}
+
 fn resolve_or_default_game_addr(
     provided_game_addr: Option<String>,
     matchmaker_addr: SocketAddr,
@@ -1031,6 +1183,7 @@ fn initialize_single_player_scene(state: &mut DemoState) {
     state.local_player_id = local_player_id;
     state.multiplayer = None;
     state.scene_initialized = true;
+    state.game_mode = GameMode::DefaultScene;
     state.camera_pan = Vec3::ZERO;
     state.camera_middle_dragging = false;
     state.camera_last_cursor = None;
@@ -1151,6 +1304,7 @@ fn initialize_multiplayer_scene(state: &mut DemoState, session: MatchSession) {
         hash_check_counter: 0,
     });
     state.scene_initialized = true;
+    state.game_mode = GameMode::DefaultScene;
     state.camera_pan = Vec3::ZERO;
     state.camera_middle_dragging = false;
     state.camera_last_cursor = None;
@@ -1160,6 +1314,67 @@ fn initialize_multiplayer_scene(state: &mut DemoState, session: MatchSession) {
 
     let _ = state.core.platform.window.set_title(&format!(
         "Forge ECS -- Game [peer {} {}]",
+        local_player_id,
+        if is_host { "host" } else { "client" }
+    ));
+}
+
+fn initialize_multiplayer_ctf_scene(state: &mut DemoState, session: MatchSession) {
+    reload_scene(&mut state.core.world, "assets/ctf_scene.json")
+        .unwrap_or_else(|error| panic!("failed to load CTF scene: {error}"));
+
+    let local_player_id = session.local_peer_id();
+    let assignments = session.ctf_assignments().to_vec();
+    let refs = setup_ctf_scene_entities(&mut state.core.world, &assignments);
+
+    state.core.world.insert_resource(KeysPressed::default());
+    state.bus.register(LoopPhase::Update, -20, CtfInputSystem);
+    state.bus.register(LoopPhase::Update, -9, StopOnWinSystem);
+    state.bus.register(LoopPhase::Update, 12, WallCollisionSystem);
+    state.bus.register(LoopPhase::Update, 15, FlagPickupSystem);
+    state.bus.register(LoopPhase::Update, 20, FlagCarrySystem);
+    state.bus.register(LoopPhase::Update, 25, WinConditionSystem);
+
+    let player_entities: Vec<(u64, Entity)> = assignments
+        .iter()
+        .map(|assignment| {
+            (
+                assignment.client_id,
+                refs.player(assignment.primary_slot),
+            )
+        })
+        .collect();
+
+    state.player_slots = player_entities
+        .iter()
+        .enumerate()
+        .map(|(slot, (player_id, _))| (*player_id, slot))
+        .collect();
+    state.player_entities = player_entities;
+    state.local_player_id = local_player_id;
+
+    let is_host = session.is_host();
+    state.core.world.insert_resource(NetworkResource {
+        pending_events: Vec::new(),
+        local_peer_id: local_player_id,
+        is_host,
+        outbound_input: None,
+    });
+
+    state.multiplayer = Some(MultiplayerRuntime {
+        session,
+        tick_accumulator: 0.0,
+        hash_check_counter: 0,
+    });
+    state.scene_initialized = true;
+    state.game_mode = GameMode::CaptureTheFlag;
+    state.camera_pan = Vec3::ZERO;
+    state.camera_middle_dragging = false;
+    state.camera_last_cursor = None;
+    state.camera_entity = Some(ctf_camera_entity(&state.core.world));
+
+    let _ = state.core.platform.window.set_title(&format!(
+        "Forge ECS -- Capture the Flag [peer {} {}]",
         local_player_id,
         if is_host { "host" } else { "client" }
     ));
@@ -1230,10 +1445,32 @@ fn draw_launcher_ui(ui: &imgui::Ui, launcher: &mut LauncherRuntime) {
                     }
                 }
                 LauncherScreen::CreateLobbyConfig => {
-                    ui.text("Select lobby size.");
+                    ui.text("Select game mode and lobby size.");
+
+                    let mut mode_index = if launcher.game_mode == GameMode::CaptureTheFlag {
+                        1
+                    } else {
+                        0
+                    };
+                    let mode_labels = ["Default Scene", "Capture The Flag"];
+                    if ui.combo_simple_string("Mode", &mut mode_index, &mode_labels) {
+                        launcher.game_mode = if mode_index == 1 {
+                            GameMode::CaptureTheFlag
+                        } else {
+                            GameMode::DefaultScene
+                        };
+                        if launcher.game_mode == GameMode::CaptureTheFlag {
+                            launcher.target_players = launcher.target_players.clamp(2, 4);
+                        }
+                    }
 
                     let mut target = i32::from(launcher.target_players);
-                    ui.slider("Players", 1_i32, 4_i32, &mut target);
+                    let min_players = if launcher.game_mode == GameMode::CaptureTheFlag {
+                        2_i32
+                    } else {
+                        1_i32
+                    };
+                    ui.slider("Players", min_players, 4_i32, &mut target);
                     launcher.target_players = target as u8;
 
                     if ui.button("Create") {
@@ -1268,17 +1505,20 @@ fn draw_launcher_ui(ui: &imgui::Ui, launcher: &mut LauncherRuntime) {
                     }
                 }
                 LauncherScreen::WaitingRoom => {
-                    let lobby = launcher.lobby_state.as_ref();
+                    let lobby = launcher.lobby_state.clone();
                     let lobby_code = launcher.lobby_code.as_deref().unwrap_or("----");
                     ui.text(format!("Lobby Code: {lobby_code}"));
 
                     if let Some(lobby) = lobby {
+                        ui.text(format!("Mode: {:?}", lobby.game_mode));
                         ui.text(format!(
                             "Players: {}/{}",
                             lobby.players.len(),
                             lobby.target_players
                         ));
-                        if let Some(countdown) = lobby.countdown_seconds {
+                        if lobby.game_mode == GameMode::CaptureTheFlag {
+                            ui.text("CTF starts manually after host slot assignment.");
+                        } else if let Some(countdown) = lobby.countdown_seconds {
                             ui.text(format!("Auto-start in: {countdown}s"));
                         } else {
                             ui.text("Auto-start waiting for required players...");
@@ -1296,6 +1536,11 @@ fn draw_launcher_ui(ui: &imgui::Ui, launcher: &mut LauncherRuntime) {
                                 ""
                             };
                             ui.bullet_text(format!("{}{}", player.name, host_tag));
+                        }
+
+                        if lobby.game_mode == GameMode::CaptureTheFlag {
+                            ui.separator();
+                            draw_ctf_assignment_ui(ui, launcher, &lobby);
                         }
                     }
 
@@ -1327,6 +1572,82 @@ fn draw_launcher_ui(ui: &imgui::Ui, launcher: &mut LauncherRuntime) {
                 );
             }
         });
+}
+
+fn draw_ctf_assignment_ui(ui: &imgui::Ui, launcher: &mut LauncherRuntime, lobby: &LobbyState) {
+    ui.text("CTF Slots");
+    let mut players = lobby.players.clone();
+    players.sort_by_key(|player| player.client_id);
+    let mut assignments = normalized_ctf_assignments(lobby);
+    let slot_labels = CtfSlot::ALL.map(CtfSlot::label);
+    let is_host = launcher.is_host();
+    let mut changed = false;
+
+    for player in players {
+        let assignment_index = assignments
+            .iter()
+            .position(|assignment| assignment.client_id == player.client_id)
+            .expect("normalized assignment exists");
+        let old_slot = assignments[assignment_index].primary_slot;
+        let mut slot_index = old_slot.index();
+        if is_host {
+            let label = format!("{}##slot_{}", player.name, player.client_id);
+            if ui.combo_simple_string(&label, &mut slot_index, &slot_labels) {
+                let new_slot = CtfSlot::ALL[slot_index];
+                if new_slot != old_slot {
+                    if let Some(other) = assignments
+                        .iter_mut()
+                        .find(|assignment| assignment.primary_slot == new_slot)
+                    {
+                        other.primary_slot = old_slot;
+                    }
+                    assignments[assignment_index].primary_slot = new_slot;
+                    changed = true;
+                }
+            }
+        } else {
+            ui.bullet_text(format!("{}: {}", player.name, old_slot.label()));
+        }
+    }
+
+    if changed {
+        launcher.update_ctf_assignments(assignments);
+    }
+}
+
+fn normalized_ctf_assignments(lobby: &LobbyState) -> Vec<CtfSlotAssignment> {
+    let mut assignments = lobby.ctf_assignments.clone();
+    assignments.retain(|assignment| {
+        lobby
+            .players
+            .iter()
+            .any(|player| player.client_id == assignment.client_id)
+    });
+
+    for player in &lobby.players {
+        if assignments
+            .iter()
+            .any(|assignment| assignment.client_id == player.client_id)
+        {
+            continue;
+        }
+        let slot = CtfSlot::ALL
+            .iter()
+            .copied()
+            .find(|slot| {
+                !assignments
+                    .iter()
+                    .any(|assignment| assignment.primary_slot == *slot)
+            })
+            .unwrap_or(CtfSlot::Red1);
+        assignments.push(CtfSlotAssignment {
+            client_id: player.client_id,
+            primary_slot: slot,
+        });
+    }
+
+    assignments.sort_by_key(|assignment| assignment.client_id);
+    assignments
 }
 
 
@@ -1376,6 +1697,7 @@ fn apply_multiplayer_tick(
     world: &mut World,
     local_player_id: u64,
     player_entities: &[(u64, Entity)],
+    game_mode: GameMode,
 ) {
     let tick_rate = runtime.session.tick_rate().max(1);
     let tick_dt = 1.0_f32 / tick_rate as f32;
@@ -1384,14 +1706,17 @@ fn apply_multiplayer_tick(
     while runtime.tick_accumulator >= tick_dt {
         runtime.tick_accumulator -= tick_dt;
 
-        // Compute movement from the local player's PlayerInput bindings + held keys.
-        let (move_x, move_y) = {
+        // Compute movement/action from local bindings + held keys.
+        let (move_x, move_y, action_bits) = if game_mode == GameMode::CaptureTheFlag {
+            let keys = world.resource::<KeysPressed>().cloned().unwrap_or_default();
+            compute_ctf_input(&keys)
+        } else {
             let keys = world.resource::<KeysPressed>().cloned().unwrap_or_default();
             let local_entity = player_entities
                 .iter()
                 .find(|(id, _)| *id == local_player_id)
                 .map(|(_, e)| *e);
-            if let Some(entity) = local_entity {
+            let movement = if let Some(entity) = local_entity {
                 if let Some(pi) = world.get::<PlayerInput>(entity).cloned() {
                     compute_movement(&keys, &pi)
                 } else {
@@ -1399,19 +1724,25 @@ fn apply_multiplayer_tick(
                 }
             } else {
                 compute_movement_default(&keys)
-            }
+            };
+            (movement.0, movement.1, 0)
         };
         let input = InputFrame {
             tick: runtime.session.current_tick(),
             player_id: runtime.session.local_peer_id(),
             move_x,
             move_y,
-            action_bits: 0,
+            action_bits,
         };
 
-        runtime.session.enqueue_local_input(input);
-        // Apply local prediction immediately (dead reckoning).
-        apply_player_velocity(world, player_entities, local_player_id, move_x, move_y);
+        runtime.session.enqueue_local_input(input.clone());
+        let mut ctf_frames = Vec::new();
+        if game_mode == GameMode::CaptureTheFlag {
+            ctf_frames.push(input);
+        } else {
+            // Apply local prediction immediately (dead reckoning).
+            apply_player_velocity(world, player_entities, local_player_id, move_x, move_y);
+        }
 
         runtime.session.tick();
         let current_tick = runtime.session.current_tick();
@@ -1428,8 +1759,12 @@ fn apply_multiplayer_tick(
                     apply_snapshot(world, &snapshot);
                 }
                 NetworkEvent::InputReceived(input) => {
-                    let InputFrame { player_id, move_x, move_y, .. } = input;
-                    apply_player_velocity(world, player_entities, player_id, move_x, move_y);
+                    if game_mode == GameMode::CaptureTheFlag {
+                        ctf_frames.push(input);
+                    } else {
+                        let InputFrame { player_id, move_x, move_y, .. } = input;
+                        apply_player_velocity(world, player_entities, player_id, move_x, move_y);
+                    }
                 }
                 NetworkEvent::HashMismatch { .. } => {}
                 NetworkEvent::HostHashReceived { tick, host_hash } => {
@@ -1446,10 +1781,19 @@ fn apply_multiplayer_tick(
             }
         }
 
+        if game_mode == GameMode::CaptureTheFlag {
+            world.insert_resource(CtfInputState { frames: ctf_frames });
+        }
+
         // Host: periodically broadcast state hash for desync detection.
         if runtime.session.is_host() {
             runtime.hash_check_counter += 1;
-            if runtime.hash_check_counter >= HASH_CHECK_INTERVAL {
+            let stride = if game_mode == GameMode::CaptureTheFlag {
+                DEFAULT_SNAPSHOT_STRIDE
+            } else {
+                HASH_CHECK_INTERVAL
+            };
+            if runtime.hash_check_counter >= stride {
                 runtime.hash_check_counter = 0;
                 let hash = state_hash(world, current_tick);
                 runtime.session.broadcast_hash(current_tick, hash);
@@ -1519,6 +1863,16 @@ fn render(s: &mut DemoState) {
     if let Some(launcher) = s.launcher.as_mut() {
         let ui = s.core.imgui.begin_frame(s.core.platform.window());
         draw_launcher_ui(ui, launcher);
+        s.core.imgui.end_frame(
+            s.core.platform.window(),
+            &s.core.render_ctx.device,
+            &s.core.render_ctx.queue,
+            &mut encoder,
+            &view,
+        );
+    } else if s.scene_initialized && s.game_mode == GameMode::CaptureTheFlag {
+        let ui = s.core.imgui.begin_frame(s.core.platform.window());
+        draw_ctf_hud(ui, &s.core.world);
         s.core.imgui.end_frame(
             s.core.platform.window(),
             &s.core.render_ctx.device,
@@ -1632,6 +1986,7 @@ fn bootstrap_session(
                     player_name: player_name.clone(),
                     game_addr: game_addr.clone(),
                     target_players: 4,
+                    game_mode: GameMode::DefaultScene,
                 },
             )?;
 
@@ -1769,6 +2124,8 @@ fn await_match_start(
                 host_client_id,
                 seed,
                 player_endpoints,
+                game_mode,
+                ctf_assignments,
             }) => {
                 if started_code == lobby_code {
                     return Ok(MatchState {
@@ -1777,6 +2134,8 @@ fn await_match_start(
                         shared_seed: seed,
                         players: player_endpoints,
                         start_tick: 0,
+                        game_mode,
+                        ctf_assignments,
                     });
                 }
             }

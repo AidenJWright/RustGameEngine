@@ -12,8 +12,8 @@ use clap::Parser;
 use rand::Rng;
 
 use forge_ecs::multiplayer::matchmaking::{
-    deserialize_request, send_match_event, LobbyState, MatchEvent, MatchRequest, PlayerInfo,
-    MAX_PLAYERS,
+    deserialize_request, send_match_event, CtfSlot, CtfSlotAssignment, GameMode, LobbyState,
+    MatchEvent, MatchRequest, PlayerInfo, MAX_PLAYERS,
 };
 
 const MATCHMAKER_TICK_MS: u64 = 125;
@@ -54,6 +54,10 @@ struct Lobby {
     host_client_id: Option<u64>,
     /// Desired lobby size including host.
     target_players: usize,
+    /// Game mode selected when the lobby was created.
+    game_mode: GameMode,
+    /// Host-selected CTF assignments.
+    ctf_assignments: Vec<CtfSlotAssignment>,
     /// Instant when required player threshold was reached.
     target_reached_at: Option<Instant>,
     /// Last countdown value broadcast to clients.
@@ -130,6 +134,7 @@ fn process_tick(
             player_name,
             game_addr,
             target_players,
+            game_mode,
         } => {
             match create_lobby(
                 lobbies,
@@ -138,6 +143,7 @@ fn process_tick(
                 player_name,
                 game_addr,
                 target_players,
+                game_mode,
             ) {
                 Ok((lobby_code, player_id, lobby_state)) => {
                     send_match_event(
@@ -270,6 +276,33 @@ fn process_tick(
                 )?;
             }
         },
+        MatchRequest::UpdateCtfAssignments {
+            lobby_code,
+            client_id,
+            assignments,
+        } => match update_ctf_assignments(lobbies, &lobby_code, client_id, assignments) {
+            Ok(state) => {
+                if let Some(lobby) = lobbies.get(&lobby_code) {
+                    broadcast_lobby(
+                        socket,
+                        lobby,
+                        MatchEvent::LobbyUpdated {
+                            lobby_code,
+                            lobby: state,
+                        },
+                    )?;
+                }
+            }
+            Err(error) => {
+                send_match_event(
+                    socket,
+                    &remote_addr,
+                    &MatchEvent::Error {
+                        message: error.to_string(),
+                    },
+                )?;
+            }
+        },
         MatchRequest::Heartbeat {
             lobby_code,
             client_id,
@@ -289,8 +322,9 @@ fn create_lobby(
     player_name: String,
     game_addr: String,
     target_players: u8,
+    game_mode: GameMode,
 ) -> io::Result<(String, u64, LobbyState)> {
-    let target_players = validate_target_players(target_players)?;
+    let target_players = validate_target_players(target_players, game_mode)?;
 
     let lobby_code = generate_unique_lobby_code(lobbies);
     let client_id = *next_client_id;
@@ -319,6 +353,15 @@ fn create_lobby(
         shared_seed: rand::thread_rng().gen(),
         host_client_id: Some(client_id),
         target_players,
+        game_mode,
+        ctf_assignments: if game_mode == GameMode::CaptureTheFlag {
+            vec![CtfSlotAssignment {
+                client_id,
+                primary_slot: CtfSlot::Red1,
+            }]
+        } else {
+            Vec::new()
+        },
         target_reached_at: None,
         last_countdown_sent: None,
     };
@@ -366,6 +409,7 @@ fn join_lobby(
             last_seen: now,
         },
     );
+    assign_default_ctf_slot(lobby, client_id);
     lobby.last_activity = now;
     refresh_countdown_state(lobby, now);
 
@@ -391,6 +435,9 @@ fn leave_lobby(
                 format!("player {client_id} not in lobby {lobby_code}"),
             ));
         }
+        lobby
+            .ctf_assignments
+            .retain(|assignment| assignment.client_id != client_id);
 
         reassign_host_if_needed(lobby);
         lobby.last_activity = now;
@@ -410,6 +457,35 @@ fn leave_lobby(
     } else {
         Ok(state)
     }
+}
+
+fn update_ctf_assignments(
+    lobbies: &mut HashMap<String, Lobby>,
+    lobby_code: &str,
+    requester_client_id: u64,
+    assignments: Vec<CtfSlotAssignment>,
+) -> io::Result<LobbyState> {
+    let lobby = lobbies
+        .get_mut(lobby_code)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "lobby not found"))?;
+    ensure_host_request(lobby, requester_client_id)?;
+    if lobby.game_mode != GameMode::CaptureTheFlag {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "CTF assignments are only valid for capture-the-flag lobbies",
+        ));
+    }
+    if lobby.started {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "lobby already started",
+        ));
+    }
+
+    validate_ctf_assignments(lobby, &assignments, false)?;
+    lobby.ctf_assignments = sorted_assignments(assignments);
+    lobby.last_activity = Instant::now();
+    Ok(lobby_state_for(lobby))
 }
 
 fn heartbeat_lobby(
@@ -483,6 +559,9 @@ fn try_start_match_by_requester(
             .get(lobby_code)
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "lobby not found"))?;
         ensure_host_request(lobby, requester_client_id)?;
+        if lobby.game_mode == GameMode::CaptureTheFlag {
+            validate_ctf_assignments(lobby, &lobby.ctf_assignments, true)?;
+        }
     }
 
     Ok(try_start_match(socket, lobbies, lobby_code))
@@ -490,6 +569,9 @@ fn try_start_match_by_requester(
 
 fn should_auto_start_lobby(lobby: &Lobby) -> bool {
     if lobby.started || lobby.players.is_empty() {
+        return false;
+    }
+    if lobby.game_mode == GameMode::CaptureTheFlag {
         return false;
     }
 
@@ -511,6 +593,11 @@ fn try_start_match(
     };
 
     if lobby.started || lobby.players.is_empty() {
+        return false;
+    }
+    if lobby.game_mode == GameMode::CaptureTheFlag
+        && validate_ctf_assignments(lobby, &lobby.ctf_assignments, true).is_err()
+    {
         return false;
     }
 
@@ -541,6 +628,8 @@ fn try_start_match(
         host_client_id,
         seed: lobby.shared_seed,
         player_endpoints: endpoints,
+        game_mode: lobby.game_mode,
+        ctf_assignments: lobby.ctf_assignments.clone(),
     };
 
     broadcast_lobby(socket, lobby, event).is_ok()
@@ -570,6 +659,9 @@ fn remove_stale_players(lobbies: &mut HashMap<String, Lobby>, timeout: Duration)
 
         for stale in stale_ids {
             lobby.players.remove(&stale);
+            lobby
+                .ctf_assignments
+                .retain(|assignment| assignment.client_id != stale);
             lobby.last_activity = now;
         }
 
@@ -644,18 +736,120 @@ fn lobby_state_for(lobby: &Lobby) -> LobbyState {
         host_client_id: lobby.host_client_id,
         target_players: lobby.target_players as u8,
         countdown_seconds: countdown_seconds_remaining(lobby),
+        game_mode: lobby.game_mode,
+        ctf_assignments: lobby.ctf_assignments.clone(),
     }
 }
 
-fn validate_target_players(target_players: u8) -> io::Result<usize> {
+fn validate_target_players(target_players: u8, game_mode: GameMode) -> io::Result<usize> {
     let target = target_players as usize;
-    if !(1..=MAX_PLAYERS).contains(&target) {
+    let min_players = if game_mode == GameMode::CaptureTheFlag {
+        2
+    } else {
+        1
+    };
+    if !(min_players..=MAX_PLAYERS).contains(&target) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("target_players must be 1..={MAX_PLAYERS}"),
+            format!("target_players must be {min_players}..={MAX_PLAYERS}"),
         ));
     }
     Ok(target)
+}
+
+fn assign_default_ctf_slot(lobby: &mut Lobby, client_id: u64) {
+    if lobby.game_mode != GameMode::CaptureTheFlag {
+        return;
+    }
+    if lobby
+        .ctf_assignments
+        .iter()
+        .any(|assignment| assignment.client_id == client_id)
+    {
+        return;
+    }
+    let Some(slot) = CtfSlot::ALL
+        .iter()
+        .copied()
+        .find(|slot| {
+            !lobby
+                .ctf_assignments
+                .iter()
+                .any(|assignment| assignment.primary_slot == *slot)
+        })
+    else {
+        return;
+    };
+    lobby.ctf_assignments.push(CtfSlotAssignment {
+        client_id,
+        primary_slot: slot,
+    });
+    lobby.ctf_assignments = sorted_assignments(lobby.ctf_assignments.clone());
+}
+
+fn sorted_assignments(mut assignments: Vec<CtfSlotAssignment>) -> Vec<CtfSlotAssignment> {
+    assignments.sort_by_key(|assignment| assignment.client_id);
+    assignments
+}
+
+fn validate_ctf_assignments(
+    lobby: &Lobby,
+    assignments: &[CtfSlotAssignment],
+    require_start_ready: bool,
+) -> io::Result<()> {
+    if lobby.game_mode != GameMode::CaptureTheFlag {
+        return Ok(());
+    }
+    let player_count = lobby.players.len();
+    if require_start_ready && !(2..=MAX_PLAYERS).contains(&player_count) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "CTF requires 2 to 4 players",
+        ));
+    }
+    if assignments.len() != player_count {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "every current lobby player must have exactly one CTF slot",
+        ));
+    }
+
+    let mut seen_players = std::collections::HashSet::new();
+    let mut seen_slots = std::collections::HashSet::new();
+    let mut has_red = false;
+    let mut has_blue = false;
+
+    for assignment in assignments {
+        if !lobby.players.contains_key(&assignment.client_id) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("unknown CTF assignment player {}", assignment.client_id),
+            ));
+        }
+        if !seen_players.insert(assignment.client_id) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "duplicate CTF player assignment",
+            ));
+        }
+        if !seen_slots.insert(assignment.primary_slot) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "duplicate CTF slot assignment",
+            ));
+        }
+        has_red |= assignment.primary_slot.is_red();
+        has_blue |= !assignment.primary_slot.is_red();
+    }
+
+    if require_start_ready && (!has_red || !has_blue) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "CTF requires at least one assigned player per team",
+        ));
+    }
+
+    Ok(())
 }
 
 fn refresh_countdown_state(lobby: &mut Lobby, now: Instant) {
@@ -784,9 +978,18 @@ mod tests {
             shared_seed: 42,
             host_client_id: Some(1),
             target_players,
+            game_mode: GameMode::DefaultScene,
+            ctf_assignments: Vec::new(),
             target_reached_at: reached_ago.map(|duration| now - duration),
             last_countdown_sent: None,
         }
+    }
+
+    fn ctf_test_lobby(player_count: usize, assignments: Vec<CtfSlotAssignment>) -> Lobby {
+        let mut lobby = test_lobby(player_count, player_count, None, false);
+        lobby.game_mode = GameMode::CaptureTheFlag;
+        lobby.ctf_assignments = assignments;
+        lobby
     }
 
     #[test]
@@ -829,5 +1032,93 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
 
         ensure_host_request(&lobby, 1).expect("host should be allowed");
+    }
+
+    #[test]
+    fn ctf_start_requires_valid_assignments() {
+        let missing_blue = ctf_test_lobby(
+            2,
+            vec![
+                CtfSlotAssignment {
+                    client_id: 1,
+                    primary_slot: CtfSlot::Red1,
+                },
+                CtfSlotAssignment {
+                    client_id: 2,
+                    primary_slot: CtfSlot::Red2,
+                },
+            ],
+        );
+        assert!(validate_ctf_assignments(&missing_blue, &missing_blue.ctf_assignments, true)
+            .is_err());
+
+        let duplicate_slot = ctf_test_lobby(
+            2,
+            vec![
+                CtfSlotAssignment {
+                    client_id: 1,
+                    primary_slot: CtfSlot::Red1,
+                },
+                CtfSlotAssignment {
+                    client_id: 2,
+                    primary_slot: CtfSlot::Red1,
+                },
+            ],
+        );
+        assert!(validate_ctf_assignments(&duplicate_slot, &duplicate_slot.ctf_assignments, true)
+            .is_err());
+
+        let valid = ctf_test_lobby(
+            2,
+            vec![
+                CtfSlotAssignment {
+                    client_id: 1,
+                    primary_slot: CtfSlot::Red1,
+                },
+                CtfSlotAssignment {
+                    client_id: 2,
+                    primary_slot: CtfSlot::Blue1,
+                },
+            ],
+        );
+        validate_ctf_assignments(&valid, &valid.ctf_assignments, true)
+            .expect("valid CTF assignment should pass");
+    }
+
+    #[test]
+    fn ctf_assignment_update_requires_host() {
+        let mut lobbies = HashMap::new();
+        let lobby = ctf_test_lobby(
+            2,
+            vec![
+                CtfSlotAssignment {
+                    client_id: 1,
+                    primary_slot: CtfSlot::Red1,
+                },
+                CtfSlotAssignment {
+                    client_id: 2,
+                    primary_slot: CtfSlot::Blue1,
+                },
+            ],
+        );
+        lobbies.insert(lobby.code.clone(), lobby);
+
+        let err = update_ctf_assignments(
+            &mut lobbies,
+            "1234",
+            2,
+            vec![
+                CtfSlotAssignment {
+                    client_id: 1,
+                    primary_slot: CtfSlot::Red2,
+                },
+                CtfSlotAssignment {
+                    client_id: 2,
+                    primary_slot: CtfSlot::Blue2,
+                },
+            ],
+        )
+        .expect_err("non-host update should be rejected");
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
     }
 }

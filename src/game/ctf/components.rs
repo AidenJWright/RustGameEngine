@@ -1,11 +1,12 @@
 //! Runtime-only components for capture the flag.
 
 use crate::ecs::component::Component;
+use crate::multiplayer::matchmaking::CtfSlot;
 
 /// Marks a player entity and stores its team/player id: 1 or 2.
 #[derive(Debug, Clone)]
 pub struct PlayerMarker {
-    pub id: u8,
+    pub slot: CtfSlot,
 }
 
 impl Component for PlayerMarker {}
@@ -13,6 +14,7 @@ impl Component for PlayerMarker {}
 /// Marks a flag entity and records which player owns it.
 #[derive(Debug, Clone)]
 pub struct Flag {
+    /// Owner team id: 1 = red, 2 = blue.
     pub owner_id: u8,
 }
 

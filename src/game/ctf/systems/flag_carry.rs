@@ -2,6 +2,7 @@
 
 use crate::components::Transform;
 use crate::ecs::command_buffer::CommandBuffer;
+use crate::ecs::entity::Entity;
 use crate::ecs::system::System;
 use crate::ecs::world::World;
 use crate::game::ctf::resources::{CarrierState, EntityRefs};
@@ -17,15 +18,15 @@ impl System for FlagCarrySystem {
         let Some(carrier) = world.resource::<CarrierState>().copied() else {
             return;
         };
-        let Some(refs) = world.resource::<EntityRefs>().copied() else {
+        let Some(refs) = world.resource::<EntityRefs>().cloned() else {
             return;
         };
 
-        if carrier.p1_carries {
-            move_flag_to_carrier(world, commands, refs.p1, refs.p2_flag);
+        if let Some(slot) = carrier.blue_flag_carrier {
+            move_flag_to_carrier(world, commands, refs.player(slot), refs.blue_flag);
         }
-        if carrier.p2_carries {
-            move_flag_to_carrier(world, commands, refs.p2, refs.p1_flag);
+        if let Some(slot) = carrier.red_flag_carrier {
+            move_flag_to_carrier(world, commands, refs.player(slot), refs.red_flag);
         }
     }
 }
@@ -33,8 +34,8 @@ impl System for FlagCarrySystem {
 fn move_flag_to_carrier(
     world: &World,
     commands: &mut CommandBuffer,
-    carrier: crate::ecs::entity::Entity,
-    flag: crate::ecs::entity::Entity,
+    carrier: Entity,
+    flag: Entity,
 ) {
     let Some(carrier_tf) = world.get::<Transform>(carrier) else {
         return;

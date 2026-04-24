@@ -14,6 +14,7 @@ use super::net_types::{
     DesyncMode, MatchState, NetMessage, NetworkEvent, NetworkPolicy, NetworkTick, PlayerInputFrame,
     SyncMode,
 };
+use crate::multiplayer::matchmaking::{CtfSlotAssignment, GameMode};
 
 /// Internal role derived from lobby/host-election outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +34,8 @@ pub struct MatchSession {
     local_peer_id: u64,
     host_peer_id: u64,
     players: Vec<PlayerInfo>,
+    game_mode: GameMode,
+    ctf_assignments: Vec<CtfSlotAssignment>,
     shared_seed: u64,
     socket: UdpSocket,
     local_addr: SocketAddr,
@@ -152,6 +155,8 @@ impl MatchSession {
             local_peer_id,
             host_peer_id: state.host_peer_id,
             players: state.players,
+            game_mode: state.game_mode,
+            ctf_assignments: state.ctf_assignments,
             shared_seed: state.shared_seed,
             socket,
             local_addr,
@@ -191,6 +196,16 @@ impl MatchSession {
     /// Ordered player list.
     pub fn players(&self) -> &[PlayerInfo] {
         &self.players
+    }
+
+    /// Game mode selected for this session.
+    pub fn game_mode(&self) -> GameMode {
+        self.game_mode
+    }
+
+    /// CTF slot assignments selected by the lobby host.
+    pub fn ctf_assignments(&self) -> &[CtfSlotAssignment] {
+        &self.ctf_assignments
     }
 
     /// Current tick counter.

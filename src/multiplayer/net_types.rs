@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::components::Transform;
+use crate::multiplayer::matchmaking::{CtfSlot, CtfSlotAssignment, GameMode};
 
 /// A transport-agnostic network tick index.
 pub type NetworkTick = u32;
@@ -74,6 +75,22 @@ pub struct Snapshot {
     pub tick: NetworkTick,
     /// Snapshot payload.
     pub entities: Vec<EntityStatePacket>,
+    /// Optional CTF-specific authoritative state.
+    #[serde(default)]
+    pub ctf: Option<CtfSnapshotState>,
+}
+
+/// CTF state that is not represented by entity transforms.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CtfSnapshotState {
+    /// `None` while playing, otherwise winning team id (`1` red, `2` blue).
+    pub winner: Option<u8>,
+    /// Slot carrying the red flag, if any.
+    pub red_flag_carrier: Option<CtfSlot>,
+    /// Slot carrying the blue flag, if any.
+    pub blue_flag_carrier: Option<CtfSlot>,
+    /// Current selected controlled slot per peer.
+    pub selected_slots: Vec<CtfSlotAssignment>,
 }
 
 /// Sync/correction protocol over the gameplay transport.
@@ -152,6 +169,10 @@ pub struct MatchState {
     pub players: Vec<crate::multiplayer::matchmaking::PlayerInfo>,
     /// Host tick at which authoritative game state starts.
     pub start_tick: NetworkTick,
+    /// Selected game mode for this match.
+    pub game_mode: GameMode,
+    /// Host-selected CTF slot assignments. Empty for non-CTF matches.
+    pub ctf_assignments: Vec<CtfSlotAssignment>,
 }
 
 /// Input frame alias kept for API stability with plan documentation.

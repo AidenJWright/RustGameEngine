@@ -7,7 +7,7 @@ use std::time::Duration;
 use clap::{Parser, Subcommand};
 
 use forge_ecs::multiplayer::matchmaking::{
-    deserialize_request, serialize_request, MatchEvent, MatchRequest,
+    deserialize_request, serialize_request, GameMode, MatchEvent, MatchRequest,
 };
 
 #[derive(Debug, Parser)]
@@ -83,6 +83,7 @@ fn main() {
                 player_name,
                 game_addr,
                 target_players,
+                game_mode: GameMode::DefaultScene,
             },
             true,
         ),
@@ -193,6 +194,7 @@ fn print_event(event: &MatchEvent) {
             println!("client_id={player_id}");
             println!("lobby_started={}", lobby.started,);
             println!("target_players={}", lobby.target_players);
+            println!("game_mode={:?}", lobby.game_mode);
             println!(
                 "countdown_seconds={}",
                 lobby.countdown_seconds.map_or(0, |seconds| seconds)
@@ -209,6 +211,7 @@ fn print_event(event: &MatchEvent) {
             println!("client_id={player_id}");
             println!("lobby_started={}", lobby.started,);
             println!("target_players={}", lobby.target_players);
+            println!("game_mode={:?}", lobby.game_mode);
             println!(
                 "countdown_seconds={}",
                 lobby.countdown_seconds.map_or(0, |seconds| seconds)
@@ -221,6 +224,7 @@ fn print_event(event: &MatchEvent) {
             println!("host_client_id={}", lobby.host_client_id.map_or(0, |id| id));
             println!("lobby_started={}", lobby.started,);
             println!("target_players={}", lobby.target_players);
+            println!("game_mode={:?}", lobby.game_mode);
             println!(
                 "countdown_seconds={}",
                 lobby.countdown_seconds.map_or(0, |seconds| seconds)
@@ -238,12 +242,16 @@ fn print_event(event: &MatchEvent) {
             host_client_id,
             seed,
             player_endpoints,
+            game_mode,
+            ctf_assignments,
         } => {
             println!("kind=match_start");
             println!("lobby_code={lobby_code}");
             println!("host_client_id={host_client_id}");
             println!("seed={seed}");
+            println!("game_mode={game_mode:?}");
             println!("players={}", player_endpoints.len());
+            println!("ctf_assignments={}", ctf_assignments.len());
             for player in player_endpoints {
                 println!(
                     "endpoint {}|{}|{}",

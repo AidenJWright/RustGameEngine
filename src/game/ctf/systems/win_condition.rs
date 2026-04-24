@@ -5,7 +5,7 @@ use crate::ecs::command_buffer::CommandBuffer;
 use crate::ecs::system::System;
 use crate::ecs::world::World;
 use crate::game::ctf::components::PlayerMarker;
-use crate::game::ctf::resources::{CarrierState, EntityRefs, GamePhase, GameState};
+use crate::game::ctf::resources::{CarrierState, CtfSyncState, EntityRefs, GamePhase, GameState};
 use crate::game::ctf::MIDLINE_X;
 
 use super::is_playing;
@@ -20,30 +20,33 @@ impl System for WinConditionSystem {
             return;
         }
 
-        let Some(refs) = world.resource::<EntityRefs>().copied() else {
+        let Some(refs) = world.resource::<EntityRefs>().cloned() else {
             return;
         };
         let carrier = world.resource::<CarrierState>().copied().unwrap_or_default();
 
-        let Some(p1_tf) = world.get::<Transform>(refs.p1) else {
-            return;
-        };
-        let Some(p2_tf) = world.get::<Transform>(refs.p2) else {
-            return;
-        };
-
-        let winner = if carrier.p1_carries && p1_tf.position.x < MIDLINE_X {
-            Some(1)
-        } else if carrier.p2_carries && p2_tf.position.x > MIDLINE_X {
-            Some(2)
-        } else {
-            None
-        };
+        let winner = carrier
+            .blue_flag_carrier
+            .and_then(|slot| {
+                world
+                    .get::<Transform>(refs.player(slot))
+                    .filter(|tf| tf.position.x < MIDLINE_X)
+                    .map(|_| 1)
+            })
+            .or_else(|| {
+                carrier.red_flag_carrier.and_then(|slot| {
+                    world
+                        .get::<Transform>(refs.player(slot))
+                        .filter(|tf| tf.position.x > MIDLINE_X)
+                        .map(|_| 2)
+                })
+            });
 
         if let Some(id) = winner {
             commands.insert_resource(GameState {
                 phase: GamePhase::Won(id),
             });
+            commands.insert_resource(CtfSyncState { dirty: true });
         }
     }
 }

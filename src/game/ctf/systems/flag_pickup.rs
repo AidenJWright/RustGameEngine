@@ -4,8 +4,9 @@ use crate::components::Transform;
 use crate::ecs::command_buffer::CommandBuffer;
 use crate::ecs::system::System;
 use crate::ecs::world::World;
-use crate::game::ctf::resources::{CarrierState, EntityRefs};
+use crate::game::ctf::resources::{CarrierState, CtfSyncState, EntityRefs};
 use crate::game::ctf::{FLAG_RADIUS, PLAYER_RADIUS};
+use crate::multiplayer::matchmaking::CtfSlot;
 
 use super::{distance_sq, is_playing};
 
@@ -19,53 +20,56 @@ impl System for FlagPickupSystem {
             return;
         }
 
-        let Some(refs) = world.resource::<EntityRefs>().copied() else {
+        let Some(refs) = world.resource::<EntityRefs>().cloned() else {
             return;
         };
         let mut carrier = world.resource::<CarrierState>().copied().unwrap_or_default();
         let original = carrier;
 
-        let Some(p1_tf) = world.get::<Transform>(refs.p1) else {
+        let Some(red_flag_tf) = world.get::<Transform>(refs.red_flag) else {
             return;
         };
-        let Some(p2_tf) = world.get::<Transform>(refs.p2) else {
-            return;
-        };
-        let Some(p1_flag_tf) = world.get::<Transform>(refs.p1_flag) else {
-            return;
-        };
-        let Some(p2_flag_tf) = world.get::<Transform>(refs.p2_flag) else {
+        let Some(blue_flag_tf) = world.get::<Transform>(refs.blue_flag) else {
             return;
         };
 
         let pickup_range_sq = (PLAYER_RADIUS + FLAG_RADIUS) * (PLAYER_RADIUS + FLAG_RADIUS);
 
-        if !carrier.p1_carries
-            && distance_sq(
-                p1_tf.position.x,
-                p1_tf.position.y,
-                p2_flag_tf.position.x,
-                p2_flag_tf.position.y,
-            ) < pickup_range_sq
-        {
-            carrier.p1_carries = true;
+        if carrier.blue_flag_carrier.is_none() {
+            carrier.blue_flag_carrier =
+                first_overlapping_slot(world, &refs, &CtfSlot::RED, blue_flag_tf, pickup_range_sq);
         }
 
-        if !carrier.p2_carries
-            && distance_sq(
-                p2_tf.position.x,
-                p2_tf.position.y,
-                p1_flag_tf.position.x,
-                p1_flag_tf.position.y,
-            ) < pickup_range_sq
-        {
-            carrier.p2_carries = true;
+        if carrier.red_flag_carrier.is_none() {
+            carrier.red_flag_carrier =
+                first_overlapping_slot(world, &refs, &CtfSlot::BLUE, red_flag_tf, pickup_range_sq);
         }
 
-        if carrier.p1_carries != original.p1_carries
-            || carrier.p2_carries != original.p2_carries
+        if carrier.blue_flag_carrier != original.blue_flag_carrier
+            || carrier.red_flag_carrier != original.red_flag_carrier
         {
             commands.insert_resource(carrier);
+            commands.insert_resource(CtfSyncState { dirty: true });
         }
     }
+}
+
+fn first_overlapping_slot(
+    world: &World,
+    refs: &EntityRefs,
+    slots: &[CtfSlot; 2],
+    flag_tf: &Transform,
+    pickup_range_sq: f32,
+) -> Option<CtfSlot> {
+    slots.iter().copied().find(|slot| {
+        let Some(player_tf) = world.get::<Transform>(refs.player(*slot)) else {
+            return false;
+        };
+        distance_sq(
+            player_tf.position.x,
+            player_tf.position.y,
+            flag_tf.position.x,
+            flag_tf.position.y,
+        ) < pickup_range_sq
+    })
 }

@@ -3,10 +3,12 @@
 pub mod flag_carry;
 pub mod flag_pickup;
 pub mod hud;
+pub mod input;
 pub mod tagging;
 pub mod wall_collision;
 pub mod win_condition;
 
+pub use input::CtfInputSystem;
 pub use flag_carry::FlagCarrySystem;
 pub use flag_pickup::FlagPickupSystem;
 pub use tagging::TaggingSystem;

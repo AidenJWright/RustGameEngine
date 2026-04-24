@@ -24,17 +24,17 @@ pub fn draw_hud(ui: &imgui::Ui, world: &World) {
         .build(|| {
             ui.text("Capture the Flag");
             ui.separator();
-            ui.text(if carrier.p1_carries {
-                "P1: has blue flag"
+            ui.text(if let Some(slot) = carrier.blue_flag_carrier {
+                format!("Red: {} has blue flag", slot.label())
             } else {
-                "P1: flag safe"
+                "Red: blue flag needed".to_string()
             });
-            ui.text(if carrier.p2_carries {
-                "P2: has red flag"
+            ui.text(if let Some(slot) = carrier.red_flag_carrier {
+                format!("Blue: {} has red flag", slot.label())
             } else {
-                "P2: flag safe"
+                "Blue: red flag needed".to_string()
             });
-            ui.text_disabled("P1: WASD + Space    P2: Arrows + Return");
+            ui.text_disabled("Move: WASD/Arrows  Tag: Space/Return  Switch: Left Shift");
         });
 
     if let GamePhase::Won(id) = phase {
@@ -52,7 +52,8 @@ pub fn draw_hud(ui: &imgui::Ui, world: &World) {
                     | imgui::WindowFlags::NO_SAVED_SETTINGS,
             )
             .build(|| {
-                ui.text(format!("Player {id} Wins!"));
+                let winner = if id == 1 { "Red Team Wins!" } else { "Blue Team Wins!" };
+                ui.text(winner);
                 ui.separator();
                 ui.text("Close and run again to restart.");
             });

@@ -1,11 +1,10 @@
-//! Local two-player capture-the-flag game.
+//! Local debug runner for the scene-backed capture-the-flag game.
 //!
 //! Run with: `cargo run --bin ctf`
 
 #![warn(clippy::all, clippy::pedantic)]
 #![allow(clippy::too_many_lines)]
 
-use std::f32::consts::FRAC_PI_2;
 use std::time::Instant;
 
 use winit::application::ApplicationHandler;
@@ -15,26 +14,24 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowAttributes, WindowId};
 
 use forge_ecs::app::AppCore;
-use forge_ecs::components::{
-    Color, ConfigKey, InputAxis, PlayerInput, Shape, Tag, Transform, Velocity,
-};
-use forge_ecs::ecs::entity::Entity;
+use forge_ecs::components::{Color, Shape, Transform};
 use forge_ecs::ecs::resource::{DeltaTime, ElapsedTime, KeysPressed};
 use forge_ecs::ecs::world::World;
-use forge_ecs::game::ctf::components::{Flag, PlayerMarker, Wall};
-use forge_ecs::game::ctf::resources::{CarrierState, EntityRefs, GameState, TagInputState};
+use forge_ecs::game::ctf::resources::CtfInputState;
+use forge_ecs::game::ctf::setup::setup_ctf_scene_entities;
 use forge_ecs::game::ctf::systems::hud::draw_hud;
 use forge_ecs::game::ctf::systems::{
-    FlagCarrySystem, FlagPickupSystem, StopOnWinSystem, TaggingSystem, WallCollisionSystem,
+    CtfInputSystem, FlagCarrySystem, FlagPickupSystem, StopOnWinSystem, WallCollisionSystem,
     WinConditionSystem,
 };
-use forge_ecs::game::ctf::{ARENA_HEIGHT, ARENA_WIDTH, PLAYER_SPEED};
-use forge_ecs::math::Vec3;
+use forge_ecs::game::ctf::{ACTION_SWITCH, ACTION_TAG, ARENA_HEIGHT, ARENA_WIDTH, SWITCH_KEY};
 use forge_ecs::messaging::{LoopPhase, MessageBus};
+use forge_ecs::multiplayer::matchmaking::{CtfSlot, CtfSlotAssignment};
+use forge_ecs::multiplayer::InputFrame;
 use forge_ecs::platform::{map_window_event, KeyCode, PlatformEvent};
 use forge_ecs::renderer::draw::DrawCommand;
 use forge_ecs::scene::reload_scene;
-use forge_ecs::systems::{MovementSystem, PlayerInputSystem};
+use forge_ecs::systems::MovementSystem;
 
 const SCENE_PATH: &str = "assets/ctf_scene.json";
 
@@ -162,6 +159,7 @@ impl ApplicationHandler for CtfApp {
             resource.0 += dt;
         }
 
+        queue_local_debug_inputs(&mut state.core.world);
         state.bus.run_frame(&mut state.core.world);
         state.core.platform.window.request_redraw();
     }
@@ -169,17 +167,12 @@ impl ApplicationHandler for CtfApp {
 
 fn build_bus() -> MessageBus {
     let mut bus = MessageBus::new();
-    bus.register(
-        LoopPhase::Update,
-        PlayerInputSystem::PRIORITY,
-        PlayerInputSystem,
-    );
+    bus.register(LoopPhase::Update, -10, CtfInputSystem);
     bus.register(LoopPhase::Update, -9, StopOnWinSystem);
     bus.register(LoopPhase::Update, MovementSystem::PRIORITY, MovementSystem);
     bus.register(LoopPhase::Update, 2, WallCollisionSystem);
     bus.register(LoopPhase::Update, 5, FlagPickupSystem);
     bus.register(LoopPhase::Update, 10, FlagCarrySystem);
-    bus.register(LoopPhase::Update, 15, TaggingSystem);
     bus.register(LoopPhase::Update, 20, WinConditionSystem);
     bus
 }
@@ -190,137 +183,53 @@ fn setup_ctf_world(world: &mut World) {
     });
 
     world.insert_resource(KeysPressed::default());
-    world.insert_resource(GameState::default());
-    world.insert_resource(CarrierState::default());
-    world.insert_resource(TagInputState::default());
-
-    let p1_flag = find_tag(world, "p1_flag");
-    let p2_flag = find_tag(world, "p2_flag");
-    let p1_spawn_entity = find_tag(world, "p1_spawn");
-    let p2_spawn_entity = find_tag(world, "p2_spawn");
-
-    world.insert(p1_flag, Flag { owner_id: 1 });
-    world.insert(p2_flag, Flag { owner_id: 2 });
-    attach_wall_components(world);
-
-    let p1_spawn = transform_xy(world, p1_spawn_entity);
-    let p2_spawn = transform_xy(world, p2_spawn_entity);
-    let p1_flag_spawn = transform_xy(world, p1_flag);
-    let p2_flag_spawn = transform_xy(world, p2_flag);
-
-    let p1 = spawn_player(
+    setup_ctf_scene_entities(
         world,
-        1,
-        "p1",
-        p1_spawn,
-        [1.0, 0.18, 0.18, 1.0],
-        FRAC_PI_2,
-        PlayerInput {
-            horizontal: InputAxis::wasd_horizontal(),
-            vertical: InputAxis::wasd_vertical(),
-            speed: PLAYER_SPEED,
-        },
-    );
-    let p2 = spawn_player(
-        world,
-        2,
-        "p2",
-        p2_spawn,
-        [0.18, 0.44, 1.0, 1.0],
-        -FRAC_PI_2,
-        PlayerInput {
-            horizontal: InputAxis {
-                negative: ConfigKey::ArrowLeft,
-                positive: ConfigKey::ArrowRight,
+        &[
+            CtfSlotAssignment {
+                client_id: 1,
+                primary_slot: CtfSlot::Red1,
             },
-            vertical: InputAxis {
-                negative: ConfigKey::ArrowUp,
-                positive: ConfigKey::ArrowDown,
+            CtfSlotAssignment {
+                client_id: 2,
+                primary_slot: CtfSlot::Blue1,
             },
-            speed: PLAYER_SPEED,
-        },
+        ],
     );
+}
 
-    world.insert_resource(EntityRefs {
-        p1,
-        p2,
-        p1_flag,
-        p2_flag,
-        p1_spawn,
-        p2_spawn,
-        p1_flag_spawn,
-        p2_flag_spawn,
+fn queue_local_debug_inputs(world: &mut World) {
+    let keys = world.resource::<KeysPressed>().cloned().unwrap_or_default();
+    let mut frames = Vec::new();
+    let red_move_x = axis(&keys, 5, 7);
+    let red_move_y = axis(&keys, 4, 6);
+    let blue_move_x = axis(&keys, 0, 1);
+    let blue_move_y = axis(&keys, 2, 3);
+    let switch = keys.is_held(SWITCH_KEY);
+
+    frames.push(InputFrame {
+        tick: 0,
+        player_id: 1,
+        move_x: red_move_x,
+        move_y: red_move_y,
+        action_bits: (if keys.is_held(8) { ACTION_TAG } else { 0 })
+            | (if switch { ACTION_SWITCH } else { 0 }),
     });
+    frames.push(InputFrame {
+        tick: 0,
+        player_id: 2,
+        move_x: blue_move_x,
+        move_y: blue_move_y,
+        action_bits: (if keys.is_held(9) { ACTION_TAG } else { 0 })
+            | (if switch { ACTION_SWITCH } else { 0 }),
+    });
+    world.insert_resource(CtfInputState { frames });
 }
 
-fn spawn_player(
-    world: &mut World,
-    id: u8,
-    tag: &str,
-    spawn: (f32, f32),
-    color: [f32; 4],
-    rotation: f32,
-    input: PlayerInput,
-) -> Entity {
-    let entity = world.spawn();
-    world.insert(entity, Tag::new(tag));
-    world.insert(
-        entity,
-        Transform {
-            position: Vec3::new(spawn.0, spawn.1, 10.0),
-            rotation,
-            ..Transform::identity()
-        },
-    );
-    world.insert(entity, Shape::Triangle { size: 40.0 });
-    world.insert(
-        entity,
-        Color {
-            r: color[0],
-            g: color[1],
-            b: color[2],
-            a: color[3],
-        },
-    );
-    world.insert(entity, Velocity { dx: 0.0, dy: 0.0 });
-    world.insert(entity, input);
-    world.insert(entity, PlayerMarker { id });
-    entity
-}
-
-fn attach_wall_components(world: &mut World) {
-    let wall_entities: Vec<Entity> = world
-        .query::<Tag>()
-        .filter(|(_, tag)| tag.as_str() == "wall")
-        .map(|(entity, _)| entity)
-        .collect();
-
-    for entity in wall_entities {
-        if let Some(Shape::Rect { width, height }) = world.get::<Shape>(entity).cloned() {
-            world.insert(
-                entity,
-                Wall {
-                    w: width * 0.5,
-                    h: height * 0.5,
-                },
-            );
-        }
-    }
-}
-
-fn find_tag(world: &World, needle: &str) -> Entity {
-    world
-        .query::<Tag>()
-        .find(|(_, tag)| tag.as_str() == needle)
-        .map(|(entity, _)| entity)
-        .unwrap_or_else(|| panic!("missing required scene tag `{needle}`"))
-}
-
-fn transform_xy(world: &World, entity: Entity) -> (f32, f32) {
-    let transform = world
-        .get::<Transform>(entity)
-        .unwrap_or_else(|| panic!("entity {entity} is missing Transform"));
-    (transform.position.x, transform.position.y)
+fn axis(keys: &KeysPressed, negative: u32, positive: u32) -> f32 {
+    let raw = (if keys.is_held(positive) { 1.0_f32 } else { 0.0 })
+        - (if keys.is_held(negative) { 1.0_f32 } else { 0.0 });
+    raw
 }
 
 fn key_discriminant(code: KeyCode) -> Option<u32> {
@@ -335,6 +244,7 @@ fn key_discriminant(code: KeyCode) -> Option<u32> {
         KeyCode::D => Some(7),
         KeyCode::Space => Some(8),
         KeyCode::Return => Some(9),
+        KeyCode::LeftShift => Some(10),
         _ => None,
     }
 }
@@ -426,6 +336,8 @@ fn make_draw_cmd(transform: &Transform, shape: &Shape, color: &Color) -> DrawCom
 #[cfg(test)]
 mod tests {
     use super::*;
+    use forge_ecs::game::ctf::components::{Flag, PlayerMarker, Wall};
+    use forge_ecs::game::ctf::resources::EntityRefs;
 
     #[test]
     fn setup_resolves_ctf_scene_entities() {
@@ -433,7 +345,7 @@ mod tests {
         setup_ctf_world(&mut world);
 
         assert!(world.resource::<EntityRefs>().is_some());
-        assert_eq!(world.query::<PlayerMarker>().count(), 2);
+        assert_eq!(world.query::<PlayerMarker>().count(), 4);
         assert_eq!(world.query::<Flag>().count(), 2);
         assert_eq!(world.query::<Wall>().count(), 16);
     }

@@ -2,6 +2,7 @@
 
 pub mod components;
 pub mod resources;
+pub mod setup;
 pub mod systems;
 
 /// Width of the CTF arena in world units.
@@ -24,3 +25,9 @@ pub const PLAYER_SPEED: f32 = 220.0;
 pub const P1_TAG_KEY: u32 = 8;
 /// Raw `KeysPressed` discriminant for Return.
 pub const P2_TAG_KEY: u32 = 9;
+/// Raw `KeysPressed` discriminant for Left Shift.
+pub const SWITCH_KEY: u32 = 10;
+/// `InputFrame::action_bits` flag for tagging.
+pub const ACTION_TAG: u8 = 0b0000_0001;
+/// `InputFrame::action_bits` flag for teammate slot switching.
+pub const ACTION_SWITCH: u8 = 0b0000_0010;

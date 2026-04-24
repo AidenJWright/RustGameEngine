@@ -1,0 +1,60 @@
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "aa9073a8e1f46713271be209a3ecfa8995e384de",
+  "prompts": {
+    "a4e49df52e9618a0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f543351b-8b7f-4444-add8-b13d791c868c",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "RM",
+      "messages": [],
+      "total_additions": 592,
+      "total_deletions": 7,
+      "accepted_lines": 33,
+      "overriden_lines": 0
+    },
+    "c60143b3b1002894": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019d87ff-5f70-70f3-af42-931177ef459b",
+        "model": "gpt-5.4"
+      },
+      "human_author": "RM",
+      "messages": [],
+      "total_additions": 803,
+      "total_deletions": 4,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "fb4e05ba2c7a30d5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019d7a6a-7eee-7613-85d0-abcd57598919",
+        "model": "unknown"
+      },
+      "human_author": "RM",
+      "messages": [],
+      "total_additions": 42,
+      "total_deletions": 73,
+      "accepted_lines": 42,
+      "overriden_lines": 0
+    },
+    "fe14cbfb08a438f7": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019d7a64-6df8-79d2-867a-632b47786dc3",
+        "model": "gpt-5.4"
+      },
+      "human_author": "RM",
+      "messages": [],
+      "total_additions": 217,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    }
+  }
+}

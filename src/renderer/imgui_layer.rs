@@ -26,6 +26,7 @@ impl ImguiLayer {
     pub fn new(window: &Window, device: &Device, queue: &Queue, format: TextureFormat) -> Self {
         let mut ctx = Context::create();
         ctx.set_ini_filename(None); // disable imgui.ini persistence
+        ctx.io_mut().config_flags |= imgui::ConfigFlags::DOCKING_ENABLE;
 
         let mut platform = WinitPlatform::new(&mut ctx);
         platform.attach_window(ctx.io_mut(), window, HiDpiMode::Default);

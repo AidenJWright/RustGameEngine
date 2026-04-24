@@ -103,6 +103,7 @@ fn key_discriminant(code: KeyCode) -> Option<u32> {
         KeyCode::S => Some(6),
         KeyCode::D => Some(7),
         KeyCode::Space => Some(8),
+        KeyCode::Return => Some(9),
         _ => None,
     }
 }
@@ -1511,6 +1512,7 @@ fn render(s: &mut DemoState) {
         &mut encoder,
         &s.core.circle_pipeline,
         &s.core.rect_pipeline,
+        &s.core.triangle_pipeline,
         [0.1, 0.1, 0.1, 1.0],
     );
 
@@ -1548,6 +1550,13 @@ fn make_draw_cmd(transform: &Transform, shape: &Shape, color: &Color) -> DrawCom
             height: *height,
             color: [color.r, color.g, color.b, color.a],
         },
+        Shape::Triangle { size } => DrawCommand::Triangle {
+            x: transform.position.x,
+            y: transform.position.y,
+            size: *size,
+            rotation: transform.rotation,
+            color: [color.r, color.g, color.b, color.a],
+        },
     }
 }
 
@@ -1574,6 +1583,19 @@ fn apply_camera_to_cmd(
             y: (y - cam_y) * zoom + center_y,
             width: width * zoom,
             height: height * zoom,
+            color,
+        },
+        DrawCommand::Triangle {
+            x,
+            y,
+            size,
+            rotation,
+            color,
+        } => DrawCommand::Triangle {
+            x: (x - cam_x) * zoom + center_x,
+            y: (y - cam_y) * zoom + center_y,
+            size: size * zoom,
+            rotation,
             color,
         },
     }

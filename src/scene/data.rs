@@ -33,19 +33,30 @@ pub struct EntityData {
     /// parent/child reconstruction; runtime IDs will differ after load.
     pub id: u64,
     /// Encoded ID of the parent entity, or `None` for roots.
+    #[serde(default)]
     pub parent: Option<u64>,
+    #[serde(default)]
     pub tag: Option<Tag>,
+    #[serde(default)]
     pub transform: Option<Transform>,
+    #[serde(default)]
     pub color: Option<Color>,
+    #[serde(default)]
     pub shape: Option<Shape>,
+    #[serde(default)]
     pub velocity: Option<Velocity>,
+    #[serde(default)]
     pub health: Option<Health>,
+    #[serde(default)]
     pub sinusoid: Option<SinusoidComponent>,
     /// Camera is saved/loaded but excluded from network snapshots.
+    #[serde(default)]
     pub camera: Option<Camera>,
     /// Configurable player-input key bindings.
+    #[serde(default)]
     pub player_input: Option<PlayerInput>,
     /// Spawn-point registry — one entity per scene holds a list of positions.
+    #[serde(default)]
     pub spawn_points: Option<SpawnPoints>,
 }
 

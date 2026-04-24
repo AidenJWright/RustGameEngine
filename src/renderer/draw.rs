@@ -6,7 +6,7 @@ use wgpu::{
 };
 
 use super::context::RenderContext;
-use super::pipeline::{CirclePipeline, RectPipeline, Uniforms};
+use super::pipeline::{CirclePipeline, RectPipeline, TrianglePipeline, Uniforms};
 
 // ---------------------------------------------------------------------------
 // Draw command enum
@@ -28,6 +28,14 @@ pub enum DrawCommand {
         y: f32,
         width: f32,
         height: f32,
+        color: [f32; 4],
+    },
+    /// A filled equilateral triangle.
+    Triangle {
+        x: f32,
+        y: f32,
+        size: f32,
+        rotation: f32,
         color: [f32; 4],
     },
 }
@@ -67,6 +75,7 @@ impl DrawQueue {
         encoder: &mut CommandEncoder,
         circle_pipeline: &CirclePipeline,
         rect_pipeline: &RectPipeline,
+        triangle_pipeline: &TrianglePipeline,
         clear_color: [f64; 4],
     ) {
         let (width, height) = (
@@ -78,6 +87,7 @@ impl DrawQueue {
         self.commands.sort_by_key(|c| match c {
             DrawCommand::Circle { .. } => 0u8,
             DrawCommand::Rect { .. } => 1u8,
+            DrawCommand::Triangle { .. } => 2u8,
         });
 
         // Begin render pass with a clear.
@@ -123,7 +133,8 @@ impl DrawQueue {
                     size: [radius * 2.0, radius * 2.0],
                     color,
                     resolution: [width, height],
-                    _pad: [0.0; 2],
+                    rotation: 0.0,
+                    _pad: 0.0,
                 };
                 let uniform_buffer = context.device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("circle draw uniform"),
@@ -175,7 +186,8 @@ impl DrawQueue {
                     size: [w, h],
                     color,
                     resolution: [width, height],
-                    _pad: [0.0; 2],
+                    rotation: 0.0,
+                    _pad: 0.0,
                 };
                 let uniform_buffer = context.device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("rect draw uniform"),
@@ -197,6 +209,56 @@ impl DrawQueue {
                         }],
                     });
                 pass.set_pipeline(&rect_pipeline.pipeline);
+                pass.set_bind_group(0, &bind_group, &[]);
+                pass.draw(0..4, 0..1);
+            });
+
+        // --- Triangles ---
+        self.commands
+            .iter()
+            .filter_map(|c| {
+                if let DrawCommand::Triangle {
+                    x,
+                    y,
+                    size,
+                    rotation,
+                    color,
+                } = c
+                {
+                    Some((*x, *y, *size, *rotation, *color))
+                } else {
+                    None
+                }
+            })
+            .for_each(|(x, y, size, rotation, color)| {
+                let uniforms = Uniforms {
+                    position: [x, y],
+                    size: [size, size],
+                    color,
+                    resolution: [width, height],
+                    rotation,
+                    _pad: 0.0,
+                };
+                let uniform_buffer = context.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("triangle draw uniform"),
+                    size: std::mem::size_of::<Uniforms>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                context
+                    .queue
+                    .write_buffer(&uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+                let bind_group = context
+                    .device
+                    .create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("triangle draw bind group"),
+                        layout: &triangle_pipeline.bind_group_layout,
+                        entries: &[wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: uniform_buffer.as_entire_binding(),
+                        }],
+                    });
+                pass.set_pipeline(&triangle_pipeline.pipeline);
                 pass.set_bind_group(0, &bind_group, &[]);
                 pass.draw(0..4, 0..1);
             });

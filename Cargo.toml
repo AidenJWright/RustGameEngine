@@ -19,6 +19,10 @@ path = "demo/game.rs"
 name = "editor"
 path = "demo/editor.rs"
 
+[[bin]]
+name = "ctf"
+path = "demo/ctf.rs"
+
 [dependencies]
 clap = { version = "4.5", features = ["derive", "env"] }
 bincode = "1.3"

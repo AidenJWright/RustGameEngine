@@ -23,6 +23,7 @@ pub enum ConfigKey {
     S,
     D,
     Space,
+    Return,
 }
 
 impl ConfigKey {
@@ -38,6 +39,7 @@ impl ConfigKey {
         Self::S,
         Self::D,
         Self::Space,
+        Self::Return,
     ];
 
     /// Human-readable label shown in the editor dropdown.
@@ -53,6 +55,7 @@ impl ConfigKey {
             Self::S => "S",
             Self::D => "D",
             Self::Space => "Space",
+            Self::Return => "Return",
         }
     }
 

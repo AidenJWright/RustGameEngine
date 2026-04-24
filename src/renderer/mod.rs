@@ -8,4 +8,4 @@ pub mod pipeline;
 pub use context::RenderContext;
 pub use draw::{DrawCommand, DrawQueue};
 pub use imgui_layer::ImguiLayer;
-pub use pipeline::{CirclePipeline, RectPipeline, Uniforms};
+pub use pipeline::{CirclePipeline, RectPipeline, TrianglePipeline, Uniforms};

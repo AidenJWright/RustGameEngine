@@ -116,6 +116,7 @@ impl GameRunner {
             &mut encoder,
             &core.circle_pipeline,
             &core.rect_pipeline,
+            &core.triangle_pipeline,
             [0.10, 0.10, 0.10, 1.0],
         );
 
@@ -229,6 +230,13 @@ pub(crate) fn make_draw_cmd(transform: &Transform, shape: &Shape, color: &Color)
             height: *height,
             color: [color.r, color.g, color.b, color.a],
         },
+        Shape::Triangle { size } => DrawCommand::Triangle {
+            x: transform.position.x,
+            y: transform.position.y,
+            size: *size,
+            rotation: transform.rotation,
+            color: [color.r, color.g, color.b, color.a],
+        },
     }
 }
 
@@ -249,6 +257,19 @@ fn apply_camera(cmd: DrawCommand, cam_x: f32, cam_y: f32, zoom: f32) -> DrawComm
             y: (y - cam_y) * zoom,
             width: width * zoom,
             height: height * zoom,
+            color,
+        },
+        DrawCommand::Triangle {
+            x,
+            y,
+            size,
+            rotation,
+            color,
+        } => DrawCommand::Triangle {
+            x: (x - cam_x) * zoom,
+            y: (y - cam_y) * zoom,
+            size: size * zoom,
+            rotation,
             color,
         },
     }

@@ -65,6 +65,19 @@ impl Camera2D {
                 height: height * self.zoom,
                 color,
             },
+            DrawCommand::Triangle {
+                x,
+                y,
+                size,
+                rotation,
+                color,
+            } => DrawCommand::Triangle {
+                x: (x - self.position.x) * self.zoom,
+                y: (y - self.position.y) * self.zoom,
+                size: size * self.zoom,
+                rotation,
+                color,
+            },
         }
     }
 

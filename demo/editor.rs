@@ -160,6 +160,10 @@ fn main() {
             system_name: "PlayerInputSystem",
             component_names: &["PlayerInput", "Velocity"],
         },
+        SystemComponentEntry {
+            system_name: "Renderer",
+            component_names: &["Transform", "Shape", "Color"],
+        },
     ];
 
     runner.run("Forge ECS — Editor", 1280, 720, |world| {

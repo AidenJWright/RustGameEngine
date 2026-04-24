@@ -12,6 +12,32 @@ use super::net_types::{NetworkTick, Snapshot};
 /// A compact deterministic state hash used for divergence checks.
 pub type FrameHash = u64;
 
+/// Canonicalize an `f32` before hashing to eliminate bit-pattern ambiguity.
+///
+/// Two cases produce multiple distinct bit patterns for logically equivalent
+/// values and must be collapsed before calling `to_bits()`:
+///
+/// - **Signed zero**: `+0.0` and `-0.0` compare equal under IEEE 754 but have
+///   different bit patterns (`0x00000000` vs `0x80000000`).  Both are mapped to
+///   `+0.0` so that peers which arrive at zero via different arithmetic paths
+///   still agree on the hash.
+///
+/// - **NaN**: any bit pattern with a saturated exponent and non-zero mantissa is
+///   a NaN, giving thousands of distinct encodings that all represent "not a
+///   number".  All are mapped to `f32::NAN` (canonical quiet NaN, `0x7FC00000`)
+///   so that a single corrupted float does not produce an unpredictable hash.
+///
+/// All other finite and infinite values are returned unchanged.
+fn canonicalize(v: f32) -> f32 {
+    if v.is_nan() {
+        f32::NAN
+    } else if v == 0.0 {
+        0.0_f32
+    } else {
+        v
+    }
+}
+
 /// Deterministically hash all `Transform` component data in a world.
 ///
 /// Camera entities are excluded because each player has an independent camera
@@ -45,13 +71,13 @@ pub fn state_hash(world: &World, _tick: NetworkTick) -> FrameHash {
         .for_each(|(entity, x, y, z, rot, sx, sy, sz)| {
             entity.index.hash(&mut hasher);
             entity.generation.hash(&mut hasher);
-            x.to_bits().hash(&mut hasher);
-            y.to_bits().hash(&mut hasher);
-            z.to_bits().hash(&mut hasher);
-            rot.to_bits().hash(&mut hasher);
-            sx.to_bits().hash(&mut hasher);
-            sy.to_bits().hash(&mut hasher);
-            sz.to_bits().hash(&mut hasher);
+            canonicalize(x).to_bits().hash(&mut hasher);
+            canonicalize(y).to_bits().hash(&mut hasher);
+            canonicalize(z).to_bits().hash(&mut hasher);
+            canonicalize(rot).to_bits().hash(&mut hasher);
+            canonicalize(sx).to_bits().hash(&mut hasher);
+            canonicalize(sy).to_bits().hash(&mut hasher);
+            canonicalize(sz).to_bits().hash(&mut hasher);
         });
 
     hasher.finish()

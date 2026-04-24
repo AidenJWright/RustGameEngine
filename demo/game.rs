@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use clap::{Parser, Subcommand};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
-use winit::event::{StartCause, WindowEvent};
+use winit::event::{MouseScrollDelta, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowAttributes, WindowId};
 
@@ -35,7 +35,9 @@ use forge_ecs::multiplayer::{
     apply_snapshot, capture_snapshot, state_hash, InputFrame, MatchSession, MatchState,
     NetworkEvent, NetworkResource,
 };
-use forge_ecs::platform::{map_window_event, KeyCode, PlatformEvent};
+use forge_ecs::platform::{
+    map_window_event, KeyCode, MouseButton as EngineMouseButton, PlatformEvent,
+};
 use forge_ecs::renderer::draw::DrawCommand;
 use forge_ecs::systems::{MovementSystem, PlayerInputSystem, SinusoidSystem};
 
@@ -686,6 +688,10 @@ struct DemoState {
     scene_initialized: bool,
     /// Camera entity that tracks the local player's position.
     camera_entity: Option<Entity>,
+    /// Manual camera offset from the followed player, controlled by middle-drag.
+    camera_pan: Vec3,
+    camera_middle_dragging: bool,
+    camera_last_cursor: Option<(f64, f64)>,
 }
 
 enum StartupMode {
@@ -719,7 +725,6 @@ impl ApplicationHandler for GameApp {
         let core = AppCore::from_window(window).expect("AppCore creation failed");
 
         let mut bus = MessageBus::new();
-        bus.register(LoopPhase::Update, PlayerInputSystem::PRIORITY, PlayerInputSystem);
         bus.register(LoopPhase::Update, 0, SinusoidSystem);
         bus.register(LoopPhase::Update, 10, MovementSystem);
 
@@ -739,6 +744,9 @@ impl ApplicationHandler for GameApp {
             launcher: None,
             scene_initialized: false,
             camera_entity: None,
+            camera_pan: Vec3::ZERO,
+            camera_middle_dragging: false,
+            camera_last_cursor: None,
         };
 
         match startup {
@@ -804,9 +812,23 @@ impl ApplicationHandler for GameApp {
             _ => {}
         }
 
-        // Update the KeysPressed resource from raw keyboard events.
-        // This drives both PlayerInputSystem and the multiplayer InputFrame.
+        // Update runtime input resources from raw keyboard/mouse events.
+        // Keyboard drives both PlayerInputSystem and the multiplayer InputFrame.
         if s.launcher.is_none() {
+            if let WindowEvent::MouseWheel { delta, .. } = &event {
+                let wheel = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => *y,
+                    MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 120.0,
+                };
+                if wheel != 0.0 {
+                    if let Some(cam_entity) = s.camera_entity {
+                        if let Some(camera) = s.core.world.get_mut::<Camera>(cam_entity) {
+                            camera.zoom = (camera.zoom * (1.0 + wheel * 0.1)).clamp(0.05, 20.0);
+                        }
+                    }
+                }
+            }
+
             if let Some(platform_event) = map_window_event(&event) {
                 match platform_event {
                     PlatformEvent::KeyPressed(code) => {
@@ -821,6 +843,27 @@ impl ApplicationHandler for GameApp {
                             if let Some(keys) = s.core.world.resource_mut::<KeysPressed>() {
                                 keys.release(disc);
                             }
+                        }
+                    }
+                    PlatformEvent::MouseButton {
+                        button: EngineMouseButton::Middle,
+                        pressed,
+                    } => {
+                        s.camera_middle_dragging = pressed;
+                        s.camera_last_cursor = None;
+                    }
+                    PlatformEvent::MouseMoved { x, y } => {
+                        if s.camera_middle_dragging {
+                            if let Some((last_x, last_y)) = s.camera_last_cursor {
+                                let zoom = s
+                                    .camera_entity
+                                    .and_then(|entity| s.core.world.get::<Camera>(entity))
+                                    .map_or(1.0, |camera| camera.zoom)
+                                    .max(0.05);
+                                s.camera_pan.x -= (x - last_x) as f32 / zoom;
+                                s.camera_pan.y -= (y - last_y) as f32 / zoom;
+                            }
+                            s.camera_last_cursor = Some((x, y));
                         }
                     }
                     _ => {}
@@ -882,7 +925,7 @@ impl ApplicationHandler for GameApp {
 
                 if let Some(pos) = player_pos {
                     if let Some(cam_tf) = s.core.world.get_mut::<Transform>(cam_entity) {
-                        cam_tf.position = pos;
+                        cam_tf.position = pos + s.camera_pan;
                     }
                 }
             }
@@ -960,6 +1003,9 @@ fn initialize_single_player_scene(state: &mut DemoState) {
 
     // Insert KeysPressed resource so PlayerInputSystem can function.
     state.core.world.insert_resource(KeysPressed::default());
+    state
+        .bus
+        .register(LoopPhase::Update, PlayerInputSystem::PRIORITY, PlayerInputSystem);
 
     // Find the player entity by Tag "player"; fall back to any entity with Velocity.
     let player_entity = state
@@ -984,6 +1030,9 @@ fn initialize_single_player_scene(state: &mut DemoState) {
     state.local_player_id = local_player_id;
     state.multiplayer = None;
     state.scene_initialized = true;
+    state.camera_pan = Vec3::ZERO;
+    state.camera_middle_dragging = false;
+    state.camera_last_cursor = None;
 
     // Find or create camera entity to follow the local player.
     state.camera_entity = find_or_create_camera(&mut state.core.world);
@@ -1004,6 +1053,7 @@ fn initialize_multiplayer_scene(state: &mut DemoState, session: MatchSession) {
     let local_player_id = session.local_peer_id();
     let mut players = session.players().to_vec();
     players.sort_by_key(|p| p.client_id);
+    let scene_player_inputs = state.core.world.query::<PlayerInput>().count();
 
     // Find SpawnPoints entity in the loaded scene.
     let spawn_positions: Vec<Vec3> = state
@@ -1018,6 +1068,14 @@ fn initialize_multiplayer_scene(state: &mut DemoState, session: MatchSession) {
                 .collect()
         })
         .unwrap_or_default();
+    println!(
+        "multiplayer scene init: local_peer={} host_peer={} players={} scene_player_inputs={} spawn_points={}",
+        local_player_id,
+        session.host_peer_id(),
+        players.len(),
+        scene_player_inputs,
+        spawn_positions.len()
+    );
 
     // Check capacity — warn if scene doesn't have enough spawn points.
     if !spawn_positions.is_empty() && players.len() > spawn_positions.len() {
@@ -1028,7 +1086,7 @@ fn initialize_multiplayer_scene(state: &mut DemoState, session: MatchSession) {
         );
     }
 
-    // Insert KeysPressed so PlayerInputSystem works.
+    // Insert KeysPressed so the multiplayer tick can capture local input.
     state.core.world.insert_resource(KeysPressed::default());
 
     // Spawn a player entity for each peer at the corresponding spawn position.
@@ -1053,7 +1111,18 @@ fn initialize_multiplayer_scene(state: &mut DemoState, session: MatchSession) {
             );
             state.core.world.insert(entity, Velocity { dx: 0.0, dy: 0.0 });
             state.core.world.insert(entity, Tag::new(&player.name));
-            state.core.world.insert(entity, PlayerInput::default());
+            if player.client_id == local_player_id {
+                state.core.world.insert(entity, PlayerInput::default());
+            }
+            println!(
+                "multiplayer player entity: slot={i} player_id={} entity={} local={} position=({:.1}, {:.1}, {:.1})",
+                player.client_id,
+                entity,
+                player.client_id == local_player_id,
+                position.x,
+                position.y,
+                position.z
+            );
             (player.client_id, entity)
         })
         .collect();
@@ -1081,6 +1150,9 @@ fn initialize_multiplayer_scene(state: &mut DemoState, session: MatchSession) {
         hash_check_counter: 0,
     });
     state.scene_initialized = true;
+    state.camera_pan = Vec3::ZERO;
+    state.camera_middle_dragging = false;
+    state.camera_last_cursor = None;
 
     // Find or create camera entity to follow the local player.
     state.camera_entity = find_or_create_camera(&mut state.core.world);
@@ -1417,8 +1489,15 @@ fn render(s: &mut DemoState) {
             s.core.world.query3::<Transform, Shape, Color>().for_each(
                 |(_, transform, shape, color)| {
                     let mut cmd = make_draw_cmd(&transform, shape, color);
-                    // Apply camera offset and zoom.
-                    cmd = apply_camera_to_cmd(cmd, cam_x, cam_y, cam_zoom);
+                    // Apply camera offset and zoom, centering the camera target onscreen.
+                    cmd = apply_camera_to_cmd(
+                        cmd,
+                        cam_x,
+                        cam_y,
+                        cam_zoom,
+                        s.core.render_ctx.surface_config.width as f32,
+                        s.core.render_ctx.surface_config.height as f32,
+                    );
                     s.core.draw_queue.push(cmd);
                 },
             );
@@ -1473,17 +1552,26 @@ fn make_draw_cmd(transform: &Transform, shape: &Shape, color: &Color) -> DrawCom
 }
 
 /// Translate and scale a draw command by the active camera.
-fn apply_camera_to_cmd(cmd: DrawCommand, cam_x: f32, cam_y: f32, zoom: f32) -> DrawCommand {
+fn apply_camera_to_cmd(
+    cmd: DrawCommand,
+    cam_x: f32,
+    cam_y: f32,
+    zoom: f32,
+    viewport_w: f32,
+    viewport_h: f32,
+) -> DrawCommand {
+    let center_x = viewport_w * 0.5;
+    let center_y = viewport_h * 0.5;
     match cmd {
         DrawCommand::Circle { x, y, radius, color } => DrawCommand::Circle {
-            x: (x - cam_x) * zoom,
-            y: (y - cam_y) * zoom,
+            x: (x - cam_x) * zoom + center_x,
+            y: (y - cam_y) * zoom + center_y,
             radius: radius * zoom,
             color,
         },
         DrawCommand::Rect { x, y, width, height, color } => DrawCommand::Rect {
-            x: (x - cam_x) * zoom,
-            y: (y - cam_y) * zoom,
+            x: (x - cam_x) * zoom + center_x,
+            y: (y - cam_y) * zoom + center_y,
             width: width * zoom,
             height: height * zoom,
             color,

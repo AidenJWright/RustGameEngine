@@ -86,8 +86,12 @@ impl EditorRunner {
     fn render(&mut self, core: &mut AppCore) {
         core.render_ctx.sync_with_window(core.platform.window());
 
-        let w = core.render_ctx.surface_config.width as f32;
-        let h = core.render_ctx.surface_config.height as f32;
+        let surface_w = core.render_ctx.surface_config.width as f32;
+        let surface_h = core.render_ctx.surface_config.height as f32;
+
+        // The editor UI is a transparent overlay, so the scene uses the full surface.
+        let viewport_w = surface_w.max(1.0);
+        let viewport_h = surface_h.max(1.0);
 
         // --- 1. Build scene draw-commands with camera transform ---
         let draw_cmds: Vec<DrawCommand> = core
@@ -95,7 +99,7 @@ impl EditorRunner {
             .query3::<Transform, Shape, Color>()
             .map(|(_, t, s, c)| {
                 let raw = make_draw_cmd(t, s, c); // world-origin coords
-                self.state.camera.transform_draw_cmd(raw, w, h)
+                self.state.camera.transform_draw_cmd(raw, viewport_w, viewport_h)
             })
             .collect();
         for cmd in draw_cmds {
@@ -159,9 +163,6 @@ impl EditorRunner {
         let mut reparent_req: Option<(Entity, Entity)> = None;
         // Make dragged entity a root (detach from parent).
         let mut detach_req: Option<Entity> = None;
-        // Inspector width read back from imgui each frame.
-        let mut captured_inspector_width = self.state.inspector_width;
-
         // --- 5. Begin GPU frame ---
         let Some((surface_texture, view)) = core.render_ctx.begin_frame() else {
             return;
@@ -186,11 +187,32 @@ impl EditorRunner {
         {
             let ui = core.imgui.begin_frame(&core.platform.window);
 
-            // Toolbar
-            ui.window("##toolbar")
-                .no_decoration()
-                .size([w, 30.0], imgui::Condition::Always)
-                .position([0.0, 0.0], imgui::Condition::Always)
+            // Use ImGui's logical display size for layout/docking math (important on HiDPI).
+            let display_w = ui.io().display_size[0];
+            let display_h = ui.io().display_size[1];
+
+            let editor_panel_bg_alpha = 0.62_f32;
+            let editor_window_pos = if self.state.editor_window_maximized {
+                [0.0, 0.0]
+            } else {
+                [16.0, 16.0]
+            };
+            let editor_window_size = if self.state.editor_window_maximized {
+                [display_w, display_h]
+            } else {
+                [520.0, (display_h - 32.0).min(560.0).max(240.0)]
+            };
+            let editor_window_condition = if self.state.editor_window_maximized {
+                imgui::Condition::Always
+            } else {
+                imgui::Condition::FirstUseEver
+            };
+
+            ui.window("Editor")
+                .bg_alpha(editor_panel_bg_alpha)
+                .position(editor_window_pos, editor_window_condition)
+                .size(editor_window_size, editor_window_condition)
+                .flags(imgui::WindowFlags::NO_SAVED_SETTINGS | imgui::WindowFlags::NO_DOCKING)
                 .build(|| {
                     if ui.button("Save") {
                         save_req = true;
@@ -208,105 +230,99 @@ impl EditorRunner {
                         spawn_req = true;
                     }
                     ui.same_line();
+                    let maximize_label = if self.state.editor_window_maximized {
+                        "Restore"
+                    } else {
+                        "Maximize"
+                    };
+                    if ui.button(maximize_label) {
+                        self.state.editor_window_maximized = !self.state.editor_window_maximized;
+                    }
+                    ui.same_line();
                     ui.text(format!("  Scene: {}", self.state.scene_path));
-                });
+                    if !self.state.status_message.is_empty() {
+                        ui.separator();
+                        ui.text(&self.state.status_message);
+                    }
+                    ui.separator();
 
-            // Hierarchy panel — drag-and-drop to reorder / reparent.
-            ui.window("Scene Hierarchy")
-                .size([210.0, h - 55.0], imgui::Condition::Always)
-                .position([0.0, 30.0], imgui::Condition::Always)
-                .build(|| {
-                    for (entity, label) in &hierarchy {
-                        let is_sel = new_selected == Some(*entity);
-                        let prefix = if is_sel { "> " } else { "  " };
-                        let btn_label = format!("{prefix}{label}##{entity:?}");
-                        if ui.button(&btn_label) {
-                            new_selected = Some(*entity);
-                        }
+                    if let Some(_tabs) = ui.tab_bar("##editor_tabs") {
+                        if let Some(_tab) = ui.tab_item("Scene Hierarchy") {
+                            for (entity, label) in &hierarchy {
+                                let is_sel = new_selected == Some(*entity);
+                                let prefix = if is_sel { "> " } else { "  " };
+                                let btn_label = format!("{prefix}{label}##{entity:?}");
+                                if ui.button(&btn_label) {
+                                    new_selected = Some(*entity);
+                                }
 
-                        // --- Drag source: grab this entity ---
-                        // Encode entity as u64 (index | generation<<32).
-                        let drag_id =
-                            (entity.index as u64) | ((entity.generation as u64) << 32);
-                        if let Some(src) = ui
-                            .drag_drop_source_config("entity_drag")
-                            .begin_payload(drag_id)
-                        {
-                            ui.text(format!("Moving: {label}"));
-                            src.end();
-                        }
+                                // --- Drag source: grab this entity ---
+                                // Encode entity as u64 (index | generation<<32).
+                                let drag_id =
+                                    (entity.index as u64) | ((entity.generation as u64) << 32);
+                                if let Some(src) = ui
+                                    .drag_drop_source_config("entity_drag")
+                                    .begin_payload(drag_id)
+                                {
+                                    ui.text(format!("Moving: {label}"));
+                                    src.end();
+                                }
 
-                        // --- Drop target: reparent onto this entity ---
-                        if let Some(target) = ui.drag_drop_target() {
-                            if let Some(Ok(payload)) = target.accept_payload::<u64, _>(
-                                "entity_drag",
-                                imgui::DragDropFlags::empty(),
-                            ) {
-                                let raw = payload.data;
-                                let dragged = Entity::new(
-                                    (raw & 0xFFFF_FFFF) as u32,
-                                    (raw >> 32) as u32,
-                                );
-                                if dragged != *entity {
-                                    reparent_req = Some((dragged, *entity));
+                                // --- Drop target: reparent onto this entity ---
+                                if let Some(target) = ui.drag_drop_target() {
+                                    if let Some(Ok(payload)) = target.accept_payload::<u64, _>(
+                                        "entity_drag",
+                                        imgui::DragDropFlags::empty(),
+                                    ) {
+                                        let raw = payload.data;
+                                        let dragged = Entity::new(
+                                            (raw & 0xFFFF_FFFF) as u32,
+                                            (raw >> 32) as u32,
+                                        );
+                                        if dragged != *entity {
+                                            reparent_req = Some((dragged, *entity));
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Drop onto empty area of the hierarchy = make root.
+                            ui.dummy([0.0, ui.content_region_avail()[1].max(8.0)]);
+                            if let Some(target) = ui.drag_drop_target() {
+                                if let Some(Ok(payload)) = target.accept_payload::<u64, _>(
+                                    "entity_drag",
+                                    imgui::DragDropFlags::empty(),
+                                ) {
+                                    let raw = payload.data;
+                                    let dragged = Entity::new(
+                                        (raw & 0xFFFF_FFFF) as u32,
+                                        (raw >> 32) as u32,
+                                    );
+                                    detach_req = Some(dragged);
                                 }
                             }
                         }
-                    }
 
-                    // Drop onto empty area of the hierarchy = make root.
-                    ui.dummy([0.0, ui.content_region_avail()[1].max(8.0)]);
-                    if let Some(target) = ui.drag_drop_target() {
-                        if let Some(Ok(payload)) = target.accept_payload::<u64, _>(
-                            "entity_drag",
-                            imgui::DragDropFlags::empty(),
-                        ) {
-                            let raw = payload.data;
-                            let dragged = Entity::new(
-                                (raw & 0xFFFF_FFFF) as u32,
-                                (raw >> 32) as u32,
-                            );
-                            detach_req = Some(dragged);
-                        }
-                    }
-                });
+                        if let Some(_tab) = ui.tab_item("Inspector") {
+                            if let Some(entity) = selected {
+                                ui.text(format!("{entity}"));
+                                ui.separator();
+                            } else {
+                                ui.text_disabled("No entity selected.");
+                                ui.separator();
+                            }
 
-            // Inspector panel.
-            // Position is anchored to the right edge every frame.
-            // Size uses FirstUseEver so the user can resize the panel; the width
-            // is read back each frame via `ui.window_size()` to keep the anchor correct.
-            let insp_x = (w - self.state.inspector_width - 10.0).max(220.0);
-            if selected.is_some() {
-                ui.window("Inspector")
-                    .size(
-                        [self.state.inspector_width, h - 55.0],
-                        imgui::Condition::FirstUseEver,
-                    )
-                    .position([insp_x, 30.0], imgui::Condition::Always)
-                    .flags(
-                        imgui::WindowFlags::NO_SAVED_SETTINGS
-                            | imgui::WindowFlags::NO_MOVE,
-                    )
-                    .build(|| {
-                        // Read back actual width so we can update the anchor next frame.
-                        captured_inspector_width = ui.window_size()[0];
-
-                        if let Some(entity) = selected {
-                            ui.text(format!("{entity}"));
-                            ui.separator();
-                        }
-
-                        // Helper: collect system names that read a given component.
-                        let systems_for = |comp: &str| -> String {
-                            let names: Vec<&str> = self
-                                .state
-                                .system_component_map
-                                .iter()
-                                .filter(|e| e.component_names.contains(&comp))
-                                .map(|e| e.system_name)
-                                .collect();
-                            names.join(", ")
-                        };
+                            // Helper: collect system names that read a given component.
+                            let systems_for = |comp: &str| -> String {
+                                let names: Vec<&str> = self
+                                    .state
+                                    .system_component_map
+                                    .iter()
+                                    .filter(|e| e.component_names.contains(&comp))
+                                    .map(|e| e.system_name)
+                                    .collect();
+                                names.join(", ")
+                            };
 
                         // --- Transform (guaranteed, cannot be removed) ---
                         if let Some(ref mut tf) = new_transform {
@@ -513,13 +529,14 @@ impl EditorRunner {
                         if ui.button("Despawn Entity") {
                             despawn_req = true;
                         }
-                    });
-            }
+                        }
+                    }
+                });
 
             // Camera control via imgui IO (middle-drag to pan, scroll to zoom)
             {
                 let io = ui.io();
-                if io.mouse_down[2] && !ui.is_any_item_active() {
+                if (io.mouse_down[2] || io.mouse_down[1]) && !ui.is_any_item_active() {
                     cam_pan = io.mouse_delta;
                 }
                 let wheel = io.mouse_wheel;
@@ -528,17 +545,6 @@ impl EditorRunner {
                 }
             }
 
-            // Status bar
-            if !self.state.status_message.is_empty() {
-                let msg = self.state.status_message.clone();
-                ui.window("##status")
-                    .no_decoration()
-                    .size([w, 22.0], imgui::Condition::Always)
-                    .position([0.0, h - 22.0], imgui::Condition::Always)
-                    .build(|| {
-                        ui.text(&msg);
-                    });
-            }
         } // ui dropped here — NLL releases borrow of core.imgui
 
         core.imgui.end_frame(
@@ -556,7 +562,6 @@ impl EditorRunner {
 
         // --- 7. Apply state changes collected during UI ---
         self.state.selected_entity = new_selected;
-        self.state.inspector_width = captured_inspector_width;
         self.state.camera.pan(cam_pan[0], cam_pan[1]);
         if cam_zoom != 0.0 {
             self.state.camera.zoom_toward(cam_zoom);

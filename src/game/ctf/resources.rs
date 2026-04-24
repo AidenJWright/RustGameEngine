@@ -46,12 +46,70 @@ impl EntityRefs {
 }
 
 /// Which player is currently carrying which opponent flag.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CarrierState {
     /// Blue-team slot carrying the red flag.
     pub red_flag_carrier: Option<CtfSlot>,
     /// Red-team slot carrying the blue flag.
     pub blue_flag_carrier: Option<CtfSlot>,
+}
+
+/// Runtime motion for a flag after it has been thrown.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FlagMotion {
+    pub dir_x: f32,
+    pub dir_y: f32,
+    pub remaining_distance: f32,
+}
+
+/// Active throw motion for each team flag.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct FlagMotionState {
+    pub red: Option<FlagMotion>,
+    pub blue: Option<FlagMotion>,
+}
+
+/// World-space waypoint path for MOBA-style auto movement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AutoMovePath {
+    pub waypoints: Vec<(f32, f32)>,
+    pub next_index: usize,
+}
+
+/// Active auto-move paths indexed by `CtfSlot::index`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AutoMoveState {
+    pub paths: [Option<AutoMovePath>; 4],
+}
+
+impl Default for AutoMoveState {
+    fn default() -> Self {
+        Self {
+            paths: std::array::from_fn(|_| None),
+        }
+    }
+}
+
+/// Latest pointer state captured by the CTF runner.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CtfPointerState {
+    pub cursor_world: Option<(f32, f32)>,
+    pub pending_left_click_world: Option<(f32, f32)>,
+}
+
+/// Grid used by point-and-click movement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NavigationGrid {
+    pub cell_size: f32,
+    pub cols: usize,
+    pub rows: usize,
+    pub walkable: Vec<bool>,
+}
+
+impl NavigationGrid {
+    pub fn is_walkable_index(&self, index: usize) -> bool {
+        self.walkable.get(index).copied().unwrap_or(false)
+    }
 }
 
 /// Per-peer ownership and currently selected CTF scene slot.
@@ -63,6 +121,7 @@ pub struct PlayerControl {
     pub owned_slots: Vec<CtfSlot>,
     pub tag_down: bool,
     pub switch_down: bool,
+    pub restart_down: bool,
 }
 
 /// All active CTF control mappings.

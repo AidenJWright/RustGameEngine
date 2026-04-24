@@ -38,6 +38,18 @@ pub struct InputFrame {
     pub move_y: f32,
     /// Additional action bits (jump, shoot, interact, ...).
     pub action_bits: u8,
+    /// Optional CTF-only pointer input used for aiming and click movement.
+    #[serde(default)]
+    pub ctf_pointer: Option<CtfPointerInput>,
+}
+
+/// CTF pointer command data attached to an input frame.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct CtfPointerInput {
+    /// Latest cursor world position for directional actions.
+    pub aim_world: Option<(f32, f32)>,
+    /// One-shot click destination for point-and-click movement.
+    pub click_world: Option<(f32, f32)>,
 }
 
 /// Canonical per-entity snapshot row used for host corrections.
@@ -81,7 +93,7 @@ pub struct Snapshot {
 }
 
 /// CTF state that is not represented by entity transforms.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CtfSnapshotState {
     /// `None` while playing, otherwise winning team id (`1` red, `2` blue).
     pub winner: Option<u8>,
@@ -91,6 +103,31 @@ pub struct CtfSnapshotState {
     pub blue_flag_carrier: Option<CtfSlot>,
     /// Current selected controlled slot per peer.
     pub selected_slots: Vec<CtfSlotAssignment>,
+    /// Active throw motion for the red flag, if any.
+    #[serde(default)]
+    pub red_flag_motion: Option<CtfFlagMotionSnapshot>,
+    /// Active throw motion for the blue flag, if any.
+    #[serde(default)]
+    pub blue_flag_motion: Option<CtfFlagMotionSnapshot>,
+    /// Active auto-move paths by slot.
+    #[serde(default)]
+    pub auto_paths: Vec<CtfAutoMovePathSnapshot>,
+}
+
+/// Serializable flag-motion row for CTF snapshots.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct CtfFlagMotionSnapshot {
+    pub dir_x: f32,
+    pub dir_y: f32,
+    pub remaining_distance: f32,
+}
+
+/// Serializable auto-move path row for CTF snapshots.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CtfAutoMovePathSnapshot {
+    pub slot: CtfSlot,
+    pub waypoints: Vec<(f32, f32)>,
+    pub next_index: usize,
 }
 
 /// Sync/correction protocol over the gameplay transport.

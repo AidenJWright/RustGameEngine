@@ -17,18 +17,21 @@ use forge_ecs::app::AppCore;
 use forge_ecs::components::{Color, Shape, Transform};
 use forge_ecs::ecs::resource::{DeltaTime, ElapsedTime, KeysPressed};
 use forge_ecs::ecs::world::World;
-use forge_ecs::game::ctf::resources::CtfInputState;
+use forge_ecs::game::ctf::resources::{CtfInputState, CtfPointerState};
 use forge_ecs::game::ctf::setup::setup_ctf_scene_entities;
 use forge_ecs::game::ctf::systems::hud::draw_hud;
 use forge_ecs::game::ctf::systems::{
-    CtfInputSystem, FlagCarrySystem, FlagPickupSystem, StopOnWinSystem, WallCollisionSystem,
-    WinConditionSystem,
+    AutoMoveSystem, CtfInputSystem, FlagCarrySystem, FlagMotionSystem, FlagPickupSystem,
+    StopOnWinSystem, WallCollisionSystem, WinConditionSystem,
 };
-use forge_ecs::game::ctf::{ACTION_SWITCH, ACTION_TAG, ARENA_HEIGHT, ARENA_WIDTH, SWITCH_KEY};
+use forge_ecs::game::ctf::{
+    ACTION_RESTART, ACTION_SWITCH, ACTION_TAG, ARENA_HEIGHT, ARENA_WIDTH, RESTART_KEY,
+    SWITCH_KEY,
+};
 use forge_ecs::messaging::{LoopPhase, MessageBus};
 use forge_ecs::multiplayer::matchmaking::{CtfSlot, CtfSlotAssignment};
-use forge_ecs::multiplayer::InputFrame;
-use forge_ecs::platform::{map_window_event, KeyCode, PlatformEvent};
+use forge_ecs::multiplayer::{CtfPointerInput, InputFrame};
+use forge_ecs::platform::{map_window_event, KeyCode, MouseButton, PlatformEvent};
 use forge_ecs::renderer::draw::DrawCommand;
 use forge_ecs::scene::reload_scene;
 use forge_ecs::systems::MovementSystem;
@@ -49,6 +52,7 @@ struct CtfState {
     core: AppCore,
     bus: MessageBus,
     last_time: Instant,
+    cursor_screen: Option<(f64, f64)>,
 }
 
 impl ApplicationHandler for CtfApp {
@@ -72,6 +76,7 @@ impl ApplicationHandler for CtfApp {
             core,
             bus: build_bus(),
             last_time: Instant::now(),
+            cursor_screen: None,
         });
     }
 
@@ -133,6 +138,24 @@ impl ApplicationHandler for CtfApp {
                         }
                     }
                 }
+                PlatformEvent::MouseMoved { x, y } => {
+                    state.cursor_screen = Some((x, y));
+                    if let Some(pointer) = state.core.world.resource_mut::<CtfPointerState>() {
+                        pointer.cursor_world = Some((x as f32, y as f32));
+                    }
+                }
+                PlatformEvent::MouseButton {
+                    button: MouseButton::Left,
+                    pressed: true,
+                } => {
+                    if let Some((x, y)) = state.cursor_screen {
+                        if let Some(pointer) = state.core.world.resource_mut::<CtfPointerState>() {
+                            let world_pos = (x as f32, y as f32);
+                            pointer.cursor_world = Some(world_pos);
+                            pointer.pending_left_click_world = Some(world_pos);
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -168,9 +191,11 @@ impl ApplicationHandler for CtfApp {
 fn build_bus() -> MessageBus {
     let mut bus = MessageBus::new();
     bus.register(LoopPhase::Update, -10, CtfInputSystem);
-    bus.register(LoopPhase::Update, -9, StopOnWinSystem);
+    bus.register(LoopPhase::Update, -8, AutoMoveSystem);
+    bus.register(LoopPhase::Update, -7, StopOnWinSystem);
     bus.register(LoopPhase::Update, MovementSystem::PRIORITY, MovementSystem);
     bus.register(LoopPhase::Update, 2, WallCollisionSystem);
+    bus.register(LoopPhase::Update, 4, FlagMotionSystem);
     bus.register(LoopPhase::Update, 5, FlagPickupSystem);
     bus.register(LoopPhase::Update, 10, FlagCarrySystem);
     bus.register(LoopPhase::Update, 20, WinConditionSystem);
@@ -200,12 +225,14 @@ fn setup_ctf_world(world: &mut World) {
 
 fn queue_local_debug_inputs(world: &mut World) {
     let keys = world.resource::<KeysPressed>().cloned().unwrap_or_default();
+    let pointer_input = take_ctf_pointer_input(world);
     let mut frames = Vec::new();
     let red_move_x = axis(&keys, 5, 7);
     let red_move_y = axis(&keys, 4, 6);
     let blue_move_x = axis(&keys, 0, 1);
     let blue_move_y = axis(&keys, 2, 3);
     let switch = keys.is_held(SWITCH_KEY);
+    let restart = keys.is_held(RESTART_KEY);
 
     frames.push(InputFrame {
         tick: 0,
@@ -213,7 +240,9 @@ fn queue_local_debug_inputs(world: &mut World) {
         move_x: red_move_x,
         move_y: red_move_y,
         action_bits: (if keys.is_held(8) { ACTION_TAG } else { 0 })
-            | (if switch { ACTION_SWITCH } else { 0 }),
+            | (if switch { ACTION_SWITCH } else { 0 })
+            | (if restart { ACTION_RESTART } else { 0 }),
+        ctf_pointer: pointer_input,
     });
     frames.push(InputFrame {
         tick: 0,
@@ -221,9 +250,22 @@ fn queue_local_debug_inputs(world: &mut World) {
         move_x: blue_move_x,
         move_y: blue_move_y,
         action_bits: (if keys.is_held(9) { ACTION_TAG } else { 0 })
-            | (if switch { ACTION_SWITCH } else { 0 }),
+            | (if switch { ACTION_SWITCH } else { 0 })
+            | (if restart { ACTION_RESTART } else { 0 }),
+        ctf_pointer: pointer_input.map(|pointer| CtfPointerInput {
+            aim_world: pointer.aim_world,
+            click_world: None,
+        }),
     });
     world.insert_resource(CtfInputState { frames });
+}
+
+fn take_ctf_pointer_input(world: &mut World) -> Option<CtfPointerInput> {
+    let pointer = world.resource_mut::<CtfPointerState>()?;
+    Some(CtfPointerInput {
+        aim_world: pointer.cursor_world,
+        click_world: pointer.pending_left_click_world.take(),
+    })
 }
 
 fn axis(keys: &KeysPressed, negative: u32, positive: u32) -> f32 {
@@ -245,6 +287,7 @@ fn key_discriminant(code: KeyCode) -> Option<u32> {
         KeyCode::Space => Some(8),
         KeyCode::Return => Some(9),
         KeyCode::LeftShift => Some(10),
+        KeyCode::R => Some(11),
         _ => None,
     }
 }

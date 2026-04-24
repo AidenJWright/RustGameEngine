@@ -34,7 +34,8 @@ pub fn draw_hud(ui: &imgui::Ui, world: &World) {
             } else {
                 "Blue: red flag needed".to_string()
             });
-            ui.text_disabled("Move: WASD/Arrows  Tag: Space/Return  Switch: Left Shift");
+            ui.text_disabled("Move: WASD/Arrows  Primary: Space/Return  Switch: Left Shift");
+            ui.text_disabled("Click: auto-move  Restart: R  Cam-follow: Left Ctrl");
         });
 
     if let GamePhase::Won(id) = phase {
@@ -55,7 +56,7 @@ pub fn draw_hud(ui: &imgui::Ui, world: &World) {
                 let winner = if id == 1 { "Red Team Wins!" } else { "Blue Team Wins!" };
                 ui.text(winner);
                 ui.separator();
-                ui.text("Close and run again to restart.");
+                ui.text("Press R to restart.");
             });
     }
 }

@@ -27,14 +27,18 @@ use forge_ecs::scene::reload_scene;
 use forge_ecs::ecs::entity::Entity;
 use forge_ecs::ecs::resource::{DeltaTime, ElapsedTime, KeysPressed};
 use forge_ecs::ecs::world::World;
-use forge_ecs::game::ctf::resources::{ControlState, CtfInputState, CtfSyncState};
+use forge_ecs::game::ctf::resources::{
+    ControlState, CtfInputState, CtfPointerState, CtfSyncState,
+};
 use forge_ecs::game::ctf::setup::{ctf_camera_entity, setup_ctf_scene_entities};
 use forge_ecs::game::ctf::systems::hud::draw_hud as draw_ctf_hud;
 use forge_ecs::game::ctf::systems::{
-    CtfInputSystem, FlagCarrySystem, FlagPickupSystem, StopOnWinSystem, WallCollisionSystem,
-    WinConditionSystem,
+    AutoMoveSystem, CtfInputSystem, FlagCarrySystem, FlagMotionSystem, FlagPickupSystem,
+    StopOnWinSystem, WallCollisionSystem, WinConditionSystem,
 };
-use forge_ecs::game::ctf::{ACTION_SWITCH, ACTION_TAG, SWITCH_KEY};
+use forge_ecs::game::ctf::{
+    ACTION_RESTART, ACTION_SWITCH, ACTION_TAG, RESTART_KEY, SWITCH_KEY,
+};
 use forge_ecs::math::Vec3;
 use forge_ecs::messaging::{LoopPhase, MessageBus};
 use forge_ecs::multiplayer;
@@ -42,8 +46,8 @@ use forge_ecs::multiplayer::matchmaking::{
     self, CtfSlot, CtfSlotAssignment, GameMode, LobbyState, MatchEvent, MatchRequest,
 };
 use forge_ecs::multiplayer::{
-    apply_snapshot, capture_snapshot, state_hash, InputFrame, MatchSession, MatchState,
-    NetworkEvent, NetworkResource, DEFAULT_SNAPSHOT_STRIDE,
+    apply_snapshot, capture_snapshot, state_hash, CtfPointerInput, InputFrame, MatchSession,
+    MatchState, NetworkEvent, NetworkResource, DEFAULT_SNAPSHOT_STRIDE,
 };
 use forge_ecs::platform::{
     map_window_event, KeyCode, MouseButton as EngineMouseButton, PlatformEvent,
@@ -115,6 +119,7 @@ fn key_discriminant(code: KeyCode) -> Option<u32> {
         KeyCode::Space => Some(8),
         KeyCode::Return => Some(9),
         KeyCode::LeftShift => Some(10),
+        KeyCode::R => Some(11),
         _ => None,
     }
 }
@@ -180,8 +185,19 @@ fn compute_ctf_input(keys: &KeysPressed) -> (f32, f32, u8) {
     if keys.is_held(SWITCH_KEY) {
         action_bits |= ACTION_SWITCH;
     }
+    if keys.is_held(RESTART_KEY) {
+        action_bits |= ACTION_RESTART;
+    }
 
     (move_x, move_y, action_bits)
+}
+
+fn take_ctf_pointer_input(world: &mut World) -> Option<CtfPointerInput> {
+    let pointer = world.resource_mut::<CtfPointerState>()?;
+    Some(CtfPointerInput {
+        aim_world: pointer.cursor_world,
+        click_world: pointer.pending_left_click_world.take(),
+    })
 }
 
 #[derive(Debug)]
@@ -785,6 +801,10 @@ struct DemoState {
     camera_pan: Vec3,
     camera_middle_dragging: bool,
     camera_last_cursor: Option<(f64, f64)>,
+    cursor_screen: Option<(f64, f64)>,
+    /// When true the camera follows the locally-controlled entity each frame.
+    /// Toggle with Left Control. Default on.
+    follow_controlled_entity: bool,
 }
 
 enum StartupMode {
@@ -841,6 +861,8 @@ impl ApplicationHandler for GameApp {
             camera_pan: Vec3::ZERO,
             camera_middle_dragging: false,
             camera_last_cursor: None,
+            cursor_screen: None,
+            follow_controlled_entity: true,
         };
 
         match startup {
@@ -930,6 +952,9 @@ impl ApplicationHandler for GameApp {
             if let Some(platform_event) = map_window_event(&event) {
                 match platform_event {
                     PlatformEvent::KeyPressed(code) => {
+                        if code == KeyCode::ControlLeft {
+                            s.follow_controlled_entity = !s.follow_controlled_entity;
+                        }
                         if let Some(disc) = key_discriminant(code) {
                             if let Some(keys) = s.core.world.resource_mut::<KeysPressed>() {
                                 keys.press(disc);
@@ -944,6 +969,12 @@ impl ApplicationHandler for GameApp {
                         }
                     }
                     PlatformEvent::MouseButton {
+                        button: EngineMouseButton::Left,
+                        pressed: true,
+                    } => {
+                        queue_ctf_click(s);
+                    }
+                    PlatformEvent::MouseButton {
                         button: EngineMouseButton::Middle,
                         pressed,
                     } => {
@@ -951,6 +982,7 @@ impl ApplicationHandler for GameApp {
                         s.camera_last_cursor = None;
                     }
                     PlatformEvent::MouseMoved { x, y } => {
+                        s.cursor_screen = Some((x, y));
                         if s.camera_middle_dragging {
                             if let Some((last_x, last_y)) = s.camera_last_cursor {
                                 let zoom = s
@@ -958,11 +990,23 @@ impl ApplicationHandler for GameApp {
                                     .and_then(|entity| s.core.world.get::<Camera>(entity))
                                     .map_or(1.0, |camera| camera.zoom)
                                     .max(0.05);
-                                s.camera_pan.x -= (x - last_x) as f32 / zoom;
-                                s.camera_pan.y -= (y - last_y) as f32 / zoom;
+                                let dx = (x - last_x) as f32 / zoom;
+                                let dy = (y - last_y) as f32 / zoom;
+                                if s.follow_controlled_entity {
+                                    s.camera_pan.x -= dx;
+                                    s.camera_pan.y -= dy;
+                                } else if let Some(cam_entity) = s.camera_entity {
+                                    if let Some(cam_tf) =
+                                        s.core.world.get_mut::<Transform>(cam_entity)
+                                    {
+                                        cam_tf.position.x -= dx;
+                                        cam_tf.position.y -= dy;
+                                    }
+                                }
                             }
                             s.camera_last_cursor = Some((x, y));
                         }
+                        update_ctf_cursor_world(s, x, y);
                     }
                     _ => {}
                 }
@@ -1019,12 +1063,13 @@ impl ApplicationHandler for GameApp {
             send_ctf_dirty_snapshot(s);
 
             // Move camera to follow the local player each frame.
-            if let Some(cam_entity) = s.camera_entity {
-                let player_pos = local_follow_position(s);
-
-                if let Some(pos) = player_pos {
-                    if let Some(cam_tf) = s.core.world.get_mut::<Transform>(cam_entity) {
-                        cam_tf.position = pos + s.camera_pan;
+            if s.follow_controlled_entity {
+                if let Some(cam_entity) = s.camera_entity {
+                    let player_pos = local_follow_position(s);
+                    if let Some(pos) = player_pos {
+                        if let Some(cam_tf) = s.core.world.get_mut::<Transform>(cam_entity) {
+                            cam_tf.position = pos + s.camera_pan;
+                        }
                     }
                 }
             }
@@ -1134,6 +1179,55 @@ fn send_ctf_dirty_snapshot(state: &mut DemoState) {
         .insert_resource(CtfSyncState { dirty: false });
 }
 
+fn update_ctf_cursor_world(state: &mut DemoState, x: f64, y: f64) {
+    if state.game_mode != GameMode::CaptureTheFlag || !state.scene_initialized {
+        return;
+    }
+    let world_pos = screen_to_ctf_world(state, x, y);
+    if let Some(pointer) = state.core.world.resource_mut::<CtfPointerState>() {
+        pointer.cursor_world = Some(world_pos);
+    }
+}
+
+fn queue_ctf_click(state: &mut DemoState) {
+    if state.game_mode != GameMode::CaptureTheFlag || !state.scene_initialized {
+        return;
+    }
+    let Some((x, y)) = state.cursor_screen else {
+        return;
+    };
+    let world_pos = screen_to_ctf_world(state, x, y);
+    if let Some(pointer) = state.core.world.resource_mut::<CtfPointerState>() {
+        pointer.cursor_world = Some(world_pos);
+        pointer.pending_left_click_world = Some(world_pos);
+    }
+}
+
+fn screen_to_ctf_world(state: &DemoState, x: f64, y: f64) -> (f32, f32) {
+    let screen_x = x as f32;
+    let screen_y = y as f32;
+    let width = state.core.render_ctx.surface_config.width as f32;
+    let height = state.core.render_ctx.surface_config.height as f32;
+
+    let Some(camera_entity) = state.camera_entity else {
+        return (screen_x, screen_y);
+    };
+    let Some(camera_tf) = state.core.world.get::<Transform>(camera_entity) else {
+        return (screen_x, screen_y);
+    };
+    let zoom = state
+        .core
+        .world
+        .get::<Camera>(camera_entity)
+        .map_or(1.0, |camera| camera.zoom)
+        .max(0.05);
+
+    (
+        (screen_x - width * 0.5) / zoom + camera_tf.position.x,
+        (screen_y - height * 0.5) / zoom + camera_tf.position.y,
+    )
+}
+
 fn resolve_or_default_game_addr(
     provided_game_addr: Option<String>,
     matchmaker_addr: SocketAddr,
@@ -1187,6 +1281,8 @@ fn initialize_single_player_scene(state: &mut DemoState) {
     state.camera_pan = Vec3::ZERO;
     state.camera_middle_dragging = false;
     state.camera_last_cursor = None;
+    state.cursor_screen = None;
+    state.follow_controlled_entity = true;
 
     // Find or create camera entity to follow the local player.
     state.camera_entity = find_or_create_camera(&mut state.core.world);
@@ -1308,6 +1404,8 @@ fn initialize_multiplayer_scene(state: &mut DemoState, session: MatchSession) {
     state.camera_pan = Vec3::ZERO;
     state.camera_middle_dragging = false;
     state.camera_last_cursor = None;
+    state.cursor_screen = None;
+    state.follow_controlled_entity = true;
 
     // Find or create camera entity to follow the local player.
     state.camera_entity = find_or_create_camera(&mut state.core.world);
@@ -1329,8 +1427,10 @@ fn initialize_multiplayer_ctf_scene(state: &mut DemoState, session: MatchSession
 
     state.core.world.insert_resource(KeysPressed::default());
     state.bus.register(LoopPhase::Update, -20, CtfInputSystem);
+    state.bus.register(LoopPhase::Update, -15, AutoMoveSystem);
     state.bus.register(LoopPhase::Update, -9, StopOnWinSystem);
     state.bus.register(LoopPhase::Update, 12, WallCollisionSystem);
+    state.bus.register(LoopPhase::Update, 14, FlagMotionSystem);
     state.bus.register(LoopPhase::Update, 15, FlagPickupSystem);
     state.bus.register(LoopPhase::Update, 20, FlagCarrySystem);
     state.bus.register(LoopPhase::Update, 25, WinConditionSystem);
@@ -1371,6 +1471,8 @@ fn initialize_multiplayer_ctf_scene(state: &mut DemoState, session: MatchSession
     state.camera_pan = Vec3::ZERO;
     state.camera_middle_dragging = false;
     state.camera_last_cursor = None;
+    state.cursor_screen = None;
+    state.follow_controlled_entity = true;
     state.camera_entity = Some(ctf_camera_entity(&state.core.world));
 
     let _ = state.core.platform.window.set_title(&format!(
@@ -1707,9 +1809,10 @@ fn apply_multiplayer_tick(
         runtime.tick_accumulator -= tick_dt;
 
         // Compute movement/action from local bindings + held keys.
-        let (move_x, move_y, action_bits) = if game_mode == GameMode::CaptureTheFlag {
+        let (move_x, move_y, action_bits, ctf_pointer) = if game_mode == GameMode::CaptureTheFlag {
             let keys = world.resource::<KeysPressed>().cloned().unwrap_or_default();
-            compute_ctf_input(&keys)
+            let (move_x, move_y, action_bits) = compute_ctf_input(&keys);
+            (move_x, move_y, action_bits, take_ctf_pointer_input(world))
         } else {
             let keys = world.resource::<KeysPressed>().cloned().unwrap_or_default();
             let local_entity = player_entities
@@ -1725,7 +1828,7 @@ fn apply_multiplayer_tick(
             } else {
                 compute_movement_default(&keys)
             };
-            (movement.0, movement.1, 0)
+            (movement.0, movement.1, 0, None)
         };
         let input = InputFrame {
             tick: runtime.session.current_tick(),
@@ -1733,6 +1836,7 @@ fn apply_multiplayer_tick(
             move_x,
             move_y,
             action_bits,
+            ctf_pointer,
         };
 
         runtime.session.enqueue_local_input(input.clone());

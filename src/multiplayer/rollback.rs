@@ -5,11 +5,16 @@ use std::hash::{Hash, Hasher};
 
 use crate::components::{Camera, Transform};
 use crate::ecs::world::World;
-use crate::game::ctf::resources::{CarrierState, ControlState, GamePhase, GameState};
+use crate::game::ctf::resources::{
+    AutoMovePath, AutoMoveState, CarrierState, ControlState, FlagMotion, FlagMotionState,
+    GamePhase, GameState,
+};
 use crate::multiplayer::matchmaking::CtfSlotAssignment;
 
-use super::net_types::EntityStatePacket;
-use super::net_types::{CtfSnapshotState, NetworkTick, Snapshot};
+use super::net_types::{
+    CtfAutoMovePathSnapshot, CtfFlagMotionSnapshot, CtfSnapshotState, EntityStatePacket,
+};
+use super::net_types::{NetworkTick, Snapshot};
 
 /// A compact deterministic state hash used for divergence checks.
 pub type FrameHash = u64;
@@ -93,6 +98,17 @@ pub fn state_hash(world: &World, _tick: NetworkTick) -> FrameHash {
                 assignment.client_id.hash(&mut hasher);
                 assignment.primary_slot.hash(&mut hasher);
             });
+        hash_motion_snapshot(&mut hasher, state.red_flag_motion);
+        hash_motion_snapshot(&mut hasher, state.blue_flag_motion);
+        state.auto_paths.iter().for_each(|path| {
+            path.slot.hash(&mut hasher);
+            path.next_index.hash(&mut hasher);
+            path.waypoints.len().hash(&mut hasher);
+            path.waypoints.iter().for_each(|(x, y)| {
+                canonicalize(*x).to_bits().hash(&mut hasher);
+                canonicalize(*y).to_bits().hash(&mut hasher);
+            });
+        });
     }
 
     hasher.finish()
@@ -162,6 +178,13 @@ pub fn apply_snapshot(world: &mut World, snapshot: &Snapshot) {
             red_flag_carrier: ctf.red_flag_carrier,
             blue_flag_carrier: ctf.blue_flag_carrier,
         });
+        world.insert_resource(FlagMotionState {
+            red: ctf.red_flag_motion.map(restore_motion),
+            blue: ctf.blue_flag_motion.map(restore_motion),
+        });
+        world.insert_resource(AutoMoveState {
+            paths: restore_auto_paths(&ctf.auto_paths),
+        });
         if let Some(mut controls) = world.resource::<ControlState>().cloned() {
             for assignment in &ctf.selected_slots {
                 if let Some(control) = controls
@@ -199,13 +222,76 @@ fn capture_ctf_snapshot_state(world: &World) -> Option<CtfSnapshotState> {
         })
         .unwrap_or_default();
     selected_slots.sort_by_key(|assignment| assignment.client_id);
+    let flag_motion = world.resource::<FlagMotionState>().copied().unwrap_or_default();
+    let auto_paths = world
+        .resource::<AutoMoveState>()
+        .map(capture_auto_paths)
+        .unwrap_or_default();
 
     Some(CtfSnapshotState {
         winner,
         red_flag_carrier: carrier.red_flag_carrier,
         blue_flag_carrier: carrier.blue_flag_carrier,
         selected_slots,
+        red_flag_motion: flag_motion.red.map(capture_motion),
+        blue_flag_motion: flag_motion.blue.map(capture_motion),
+        auto_paths,
     })
+}
+
+fn capture_motion(motion: FlagMotion) -> CtfFlagMotionSnapshot {
+    CtfFlagMotionSnapshot {
+        dir_x: motion.dir_x,
+        dir_y: motion.dir_y,
+        remaining_distance: motion.remaining_distance,
+    }
+}
+
+fn restore_motion(motion: CtfFlagMotionSnapshot) -> FlagMotion {
+    FlagMotion {
+        dir_x: motion.dir_x,
+        dir_y: motion.dir_y,
+        remaining_distance: motion.remaining_distance,
+    }
+}
+
+fn capture_auto_paths(auto_move: &AutoMoveState) -> Vec<CtfAutoMovePathSnapshot> {
+    let mut paths = Vec::new();
+    for slot in crate::multiplayer::matchmaking::CtfSlot::ALL {
+        if let Some(path) = &auto_move.paths[slot.index()] {
+            paths.push(CtfAutoMovePathSnapshot {
+                slot,
+                waypoints: path.waypoints.clone(),
+                next_index: path.next_index,
+            });
+        }
+    }
+    paths
+}
+
+fn restore_auto_paths(
+    paths: &[CtfAutoMovePathSnapshot],
+) -> [Option<AutoMovePath>; 4] {
+    let mut restored = std::array::from_fn(|_| None);
+    for path in paths {
+        restored[path.slot.index()] = Some(AutoMovePath {
+            waypoints: path.waypoints.clone(),
+            next_index: path.next_index,
+        });
+    }
+    restored
+}
+
+fn hash_motion_snapshot(
+    hasher: &mut DefaultHasher,
+    motion: Option<CtfFlagMotionSnapshot>,
+) {
+    motion.is_some().hash(hasher);
+    if let Some(motion) = motion {
+        canonicalize(motion.dir_x).to_bits().hash(hasher);
+        canonicalize(motion.dir_y).to_bits().hash(hasher);
+        canonicalize(motion.remaining_distance).to_bits().hash(hasher);
+    }
 }
 
 /// Quick delta decision helper for mismatch recovery.
@@ -218,7 +304,10 @@ mod tests {
     use super::*;
     use crate::components::Transform;
     use crate::ecs::world::World;
-    use crate::game::ctf::resources::{CarrierState, ControlState, GamePhase, GameState};
+    use crate::game::ctf::resources::{
+        AutoMovePath, AutoMoveState, CarrierState, ControlState, FlagMotion, FlagMotionState,
+        GamePhase, GameState,
+    };
     use crate::game::ctf::setup::setup_ctf_scene_entities;
     use crate::math::Vec3;
     use crate::multiplayer::matchmaking::{CtfSlot, CtfSlotAssignment};
@@ -276,6 +365,20 @@ mod tests {
             red_flag_carrier: Some(CtfSlot::Blue1),
             blue_flag_carrier: Some(CtfSlot::Red2),
         });
+        world.insert_resource(FlagMotionState {
+            red: Some(FlagMotion {
+                dir_x: 1.0,
+                dir_y: 0.0,
+                remaining_distance: 120.0,
+            }),
+            blue: None,
+        });
+        let mut paths = std::array::from_fn(|_| None);
+        paths[CtfSlot::Red1.index()] = Some(AutoMovePath {
+            waypoints: vec![(220.0, 320.0), (280.0, 360.0)],
+            next_index: 1,
+        });
+        world.insert_resource(AutoMoveState { paths });
         if let Some(mut controls) = world.resource::<ControlState>().cloned() {
             controls.controls[0].selected_slot = CtfSlot::Red2;
             world.insert_resource(controls);
@@ -285,6 +388,8 @@ mod tests {
 
         world.insert_resource(GameState::default());
         world.insert_resource(CarrierState::default());
+        world.insert_resource(FlagMotionState::default());
+        world.insert_resource(AutoMoveState::default());
         if let Some(mut controls) = world.resource::<ControlState>().cloned() {
             controls.controls[0].selected_slot = CtfSlot::Red1;
             world.insert_resource(controls);
@@ -299,6 +404,23 @@ mod tests {
         let carrier = world.resource::<CarrierState>().expect("carrier");
         assert_eq!(carrier.red_flag_carrier, Some(CtfSlot::Blue1));
         assert_eq!(carrier.blue_flag_carrier, Some(CtfSlot::Red2));
+        let motion = world.resource::<FlagMotionState>().expect("flag motion");
+        assert_eq!(
+            motion.red,
+            Some(FlagMotion {
+                dir_x: 1.0,
+                dir_y: 0.0,
+                remaining_distance: 120.0,
+            })
+        );
+        let auto_move = world.resource::<AutoMoveState>().expect("auto move");
+        assert_eq!(
+            auto_move.paths[CtfSlot::Red1.index()],
+            Some(AutoMovePath {
+                waypoints: vec![(220.0, 320.0), (280.0, 360.0)],
+                next_index: 1,
+            })
+        );
         let controls = world.resource::<ControlState>().expect("controls");
         assert_eq!(controls.controls[0].selected_slot, CtfSlot::Red2);
     }

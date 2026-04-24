@@ -1,6 +1,8 @@
 //! Capture-the-flag systems.
 
+pub mod auto_move;
 pub mod flag_carry;
+pub mod flag_motion;
 pub mod flag_pickup;
 pub mod hud;
 pub mod input;
@@ -8,8 +10,10 @@ pub mod tagging;
 pub mod wall_collision;
 pub mod win_condition;
 
+pub use auto_move::AutoMoveSystem;
 pub use input::CtfInputSystem;
 pub use flag_carry::FlagCarrySystem;
+pub use flag_motion::FlagMotionSystem;
 pub use flag_pickup::FlagPickupSystem;
 pub use tagging::TaggingSystem;
 pub use wall_collision::WallCollisionSystem;

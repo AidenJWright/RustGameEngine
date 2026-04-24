@@ -4,7 +4,7 @@ use crate::components::Transform;
 use crate::ecs::command_buffer::CommandBuffer;
 use crate::ecs::system::System;
 use crate::ecs::world::World;
-use crate::game::ctf::resources::{CarrierState, CtfSyncState, EntityRefs};
+use crate::game::ctf::resources::{CarrierState, CtfSyncState, EntityRefs, FlagMotionState};
 use crate::game::ctf::{FLAG_RADIUS, PLAYER_RADIUS};
 use crate::multiplayer::matchmaking::CtfSlot;
 
@@ -25,6 +25,7 @@ impl System for FlagPickupSystem {
         };
         let mut carrier = world.resource::<CarrierState>().copied().unwrap_or_default();
         let original = carrier;
+        let flag_motion = world.resource::<FlagMotionState>().copied().unwrap_or_default();
 
         let Some(red_flag_tf) = world.get::<Transform>(refs.red_flag) else {
             return;
@@ -35,12 +36,12 @@ impl System for FlagPickupSystem {
 
         let pickup_range_sq = (PLAYER_RADIUS + FLAG_RADIUS) * (PLAYER_RADIUS + FLAG_RADIUS);
 
-        if carrier.blue_flag_carrier.is_none() {
+        if carrier.blue_flag_carrier.is_none() && flag_motion.blue.is_none() {
             carrier.blue_flag_carrier =
                 first_overlapping_slot(world, &refs, &CtfSlot::RED, blue_flag_tf, pickup_range_sq);
         }
 
-        if carrier.red_flag_carrier.is_none() {
+        if carrier.red_flag_carrier.is_none() && flag_motion.red.is_none() {
             carrier.red_flag_carrier =
                 first_overlapping_slot(world, &refs, &CtfSlot::BLUE, red_flag_tf, pickup_range_sq);
         }

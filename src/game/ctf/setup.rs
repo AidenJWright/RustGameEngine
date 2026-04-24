@@ -4,8 +4,10 @@ use crate::components::{Camera, Shape, Tag, Transform, Velocity};
 use crate::ecs::entity::Entity;
 use crate::ecs::world::World;
 use crate::game::ctf::components::{Flag, PlayerMarker, Wall};
+use crate::game::ctf::nav::build_navigation_grid;
 use crate::game::ctf::resources::{
-    CarrierState, ControlState, CtfInputState, CtfSyncState, EntityRefs, GameState, PlayerControl,
+    AutoMoveState, CarrierState, ControlState, CtfInputState, CtfPointerState, CtfSyncState,
+    EntityRefs, FlagMotionState, GameState, PlayerControl,
 };
 use crate::multiplayer::matchmaking::{CtfSlot, CtfSlotAssignment};
 
@@ -46,8 +48,12 @@ pub fn setup_ctf_scene_entities(
 
     world.insert_resource(GameState::default());
     world.insert_resource(CarrierState::default());
+    world.insert_resource(FlagMotionState::default());
+    world.insert_resource(AutoMoveState::default());
+    world.insert_resource(build_navigation_grid(&wall_rects(world)));
     world.insert_resource(build_control_state(assignments));
     world.insert_resource(CtfInputState::default());
+    world.insert_resource(CtfPointerState::default());
     world.insert_resource(CtfSyncState::default());
     world.insert_resource(refs.clone());
     refs
@@ -85,6 +91,7 @@ fn build_control_state(assignments: &[CtfSlotAssignment]) -> ControlState {
                 owned_slots,
                 tag_down: false,
                 switch_down: false,
+                restart_down: false,
             }
         })
         .collect();
@@ -110,6 +117,20 @@ fn attach_wall_components(world: &mut World) {
             );
         }
     }
+}
+
+fn wall_rects(world: &World) -> Vec<(f32, f32, f32, f32)> {
+    world
+        .query2::<Transform, Wall>()
+        .map(|(_, transform, wall)| {
+            (
+                transform.position.x,
+                transform.position.y,
+                wall.w,
+                wall.h,
+            )
+        })
+        .collect()
 }
 
 fn require_saved_camera(world: &World) {

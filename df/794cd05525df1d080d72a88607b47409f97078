@@ -1,0 +1,99 @@
+src/multiplayer/session.rs
+  b31ffcc1f6d11566 17,38,160,213-217
+  2042ba9554aa2866 218-222
+src/multiplayer/mod.rs
+  2042ba9554aa2866 11-15
+src/bin/gen_ctf_arenas.rs
+  2042ba9554aa2866 105-139
+  b31ffcc1f6d11566 1-104,140-277
+assets/ctf_arena_large.json
+  2042ba9554aa2866 1013,1031-1032,1046,1064-1129,1134,1145,1164-1165,1167,1175-1207,1211,1227-1259,1267
+  b31ffcc1f6d11566 1-1012,1014-1030,1033-1045,1047-1063,1130-1133,1135-1144,1146-1163,1166,1168-1174,1208-1210,1212-1226,1260-1266,1268-1286
+assets/ctf_arena_medium.json
+  2042ba9554aa2866 833,851-852,866,884-949,954,965,984-985,987,995-1027,1031,1047-1079,1087
+  b31ffcc1f6d11566 1-832,834-850,853-865,867-883,950-953,955-964,966-983,986,988-994,1028-1030,1032-1046,1080-1086,1088-1106
+src/game/ctf/systems/hud.rs
+  2042ba9554aa2866 4-5,8,14-21,47,56,68-78
+.gitignore
+  h_e11066131581f1 18-20
+demo/game.rs
+  2042ba9554aa2866 31,49-50,203-213,1079,1199-1256,1777-1778,1788-1791,1795,1808,1820-1824,1834,1938,2078
+  b31ffcc1f6d11566 46,308,336,450,688,713,1498-1499,1504-1505,1648-1658,1706-1708,2193,2332,2343
+Cargo.toml
+  b31ffcc1f6d11566 42-44
+src/game/ctf/setup.rs
+  2042ba9554aa2866 10,57-60,92,190,197,209,223-227
+  b31ffcc1f6d11566 12,18,50,55-56,174,187
+src/game/ctf/systems/input.rs
+  2042ba9554aa2866 10-11,55-59,149-153,164-166,173-198,255-256,365,421,464-465,535-536,540,574,614,648,679,682,706-712,729,755,769-801,848,879-914
+  b31ffcc1f6d11566 15,17,79-82,116,262,345,468,479,481,545,558
+src/bin/matchmaker.rs
+  b31ffcc1f6d11566 16,59-60,140,150,330,362,638,747,1010
+  2042ba9554aa2866 779,829-830,845-850,857-870,1077,1142,1146
+assets/ctf_arena_small.json
+  b31ffcc1f6d11566 1-181,183-190,192,194-198,217,219-223,225-226,228,230-232,252-258
+  2042ba9554aa2866 182,191,193,199-216,218,224,227,229,233-251
+src/multiplayer/rollback.rs
+  2042ba9554aa2866 12,274
+  b31ffcc1f6d11566 313,346,359
+src/game/ctf/resources.rs
+  2042ba9554aa2866 4,30-31,82,100-113
+  b31ffcc1f6d11566 123-124
+src/game/ctf/nav.rs
+  b31ffcc1f6d11566 7-14,16-17,38-39,63,268,285,287-288,327,335
+.claude/settings.local.json
+  2042ba9554aa2866 11-14
+src/bin/matchmaker_client.rs
+  b31ffcc1f6d11566 10,87,248
+src/game/ctf/systems/flag_pickup.rs
+  2042ba9554aa2866 61
+src/multiplayer/matchmaking.rs
+  b31ffcc1f6d11566 23-68,211-212,287,321-322,383,395
+  2042ba9554aa2866 74-75,78-79,83-97,103-104,107-117,125-126,129-130,138-143,148-152,163,171-180
+src/game/ctf/systems/win_condition.rs
+  b31ffcc1f6d11566 9,27-30,37,44
+src/multiplayer/net_types.rs
+  b31ffcc1f6d11566 9,220-221
+  2042ba9554aa2866 44-46,58-61
+demo/ctf.rs
+  2042ba9554aa2866 20,33,190,254,268,273-282,361,432-446,461
+  b31ffcc1f6d11566 32,54-57,73,75,81-82,181-189,211-214,230,321-332,356-357,360,362-364,373-377,387-404,458
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "df794cd05525df1d080d72a88607b47409f97078",
+  "prompts": {
+    "2042ba9554aa2866": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019dc22d-7246-7aa1-bf45-80c12fd77e2c",
+        "model": "gpt-5.5"
+      },
+      "human_author": "RM",
+      "messages": [],
+      "total_additions": 797,
+      "total_deletions": 110,
+      "accepted_lines": 793,
+      "overriden_lines": 0
+    },
+    "b31ffcc1f6d11566": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "879fdae9-c2f0-4062-9906-b6c2087d6682",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "RM",
+      "messages": [],
+      "total_additions": 2860,
+      "total_deletions": 95,
+      "accepted_lines": 2788,
+      "overriden_lines": 0
+    }
+  },
+  "humans": {
+    "h_e11066131581f1": {
+      "author": "RM"
+    }
+  }
+}

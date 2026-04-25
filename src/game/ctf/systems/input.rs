@@ -7,12 +7,14 @@ use crate::ecs::world::World;
 use crate::game::ctf::nav::find_path;
 use crate::game::ctf::resources::{
     AutoMovePath, AutoMoveState, CarrierState, ControlState, CtfInputState, CtfPointerState,
-    CtfSyncState, EntityRefs, FlagMotion, FlagMotionState, GameState, NavigationGrid,
+    CtfRestartState, CtfSyncState, EntityRefs, FlagMotion, FlagMotionState, GameState,
+    NavigationGrid,
 };
 use crate::game::ctf::{
     ACTION_RESTART, ACTION_SWITCH, ACTION_TAG, FLAG_KNOCKDOWN_RANGE, FLAG_THROW_DISTANCE,
-    MIDLINE_X, PLAYER_SPEED, TAG_RANGE,
+    PLAYER_SPEED, TAG_RANGE,
 };
+use crate::multiplayer::matchmaking::MapSize;
 use crate::math::Vec3;
 use crate::multiplayer::matchmaking::CtfSlot;
 use crate::multiplayer::InputFrame;
@@ -50,9 +52,11 @@ impl System for CtfInputSystem {
         };
         let (restart_requested, restart_key_changed) =
             update_restart_state(&frames, &mut controls);
-        if restart_requested {
-            reset_ctf_match(world, commands, &refs, controls);
-            return;
+        if let Some(requested_map_size) = restart_requested {
+            if !is_playing(world) {
+                restart_ctf_match(world, commands, &refs, controls, requested_map_size);
+                return;
+            }
         }
 
         if !is_playing(world) {
@@ -72,6 +76,10 @@ impl System for CtfInputSystem {
         let mut auto_move = world.resource::<AutoMoveState>().cloned().unwrap_or_default();
         let original_auto_move = auto_move.clone();
         let nav_grid = world.resource::<NavigationGrid>().cloned();
+        let midline_x = world
+            .resource::<MapSize>()
+            .map(|ms| ms.midline_x())
+            .unwrap_or(crate::game::ctf::MIDLINE_X);
 
         let mut player_transforms = std::array::from_fn(|idx| {
             world
@@ -105,6 +113,7 @@ impl System for CtfInputSystem {
                 &mut flag_motion,
                 &mut auto_move,
                 nav_grid.as_ref(),
+                midline_x,
             ) {
                 dirty = true;
             }
@@ -137,8 +146,11 @@ impl System for CtfInputSystem {
     }
 }
 
-fn update_restart_state(frames: &[InputFrame], controls: &mut ControlState) -> (bool, bool) {
-    let mut restart_requested = false;
+fn update_restart_state(
+    frames: &[InputFrame],
+    controls: &mut ControlState,
+) -> (Option<Option<MapSize>>, bool) {
+    let mut restart_requested = None;
     let mut changed = false;
     for frame in frames {
         let Some(control) = controls
@@ -149,11 +161,39 @@ fn update_restart_state(frames: &[InputFrame], controls: &mut ControlState) -> (
             continue;
         };
         let restart_down = frame.action_bits & ACTION_RESTART != 0;
-        restart_requested |= restart_down && !control.restart_down;
+        if restart_down && !control.restart_down && restart_requested.is_none() {
+            restart_requested = Some(frame.ctf_restart.map(|restart| restart.map_size));
+        }
         changed |= restart_down != control.restart_down;
         control.restart_down = restart_down;
     }
     (restart_requested, changed)
+}
+
+fn restart_ctf_match(
+    world: &World,
+    commands: &mut CommandBuffer,
+    refs: &EntityRefs,
+    controls: ControlState,
+    requested_map_size: Option<MapSize>,
+) {
+    let current_map_size = world.resource::<MapSize>().copied().unwrap_or(MapSize::Small);
+    let fallback_map_size = world
+        .resource::<CtfRestartState>()
+        .map_or(current_map_size, |state| state.selected_map_size);
+    let map_size = requested_map_size.unwrap_or(fallback_map_size);
+
+    if map_size == current_map_size {
+        reset_ctf_match(world, commands, refs, controls);
+    } else {
+        commands.insert_resource(CtfRestartState {
+            selected_map_size: map_size,
+            pending_reload: Some(map_size),
+        });
+        commands.insert_resource(CtfInputState::default());
+        commands.insert_resource(controls);
+        commands.insert_resource(CtfSyncState { dirty: true });
+    }
 }
 
 fn reset_ctf_match(
@@ -212,13 +252,14 @@ fn apply_frame(
     refs: &EntityRefs,
     controls: &mut ControlState,
     carrier: &mut CarrierState,
-    player_transforms: &mut [Transform; 4],
-    velocities: &mut [Velocity; 4],
+    player_transforms: &mut [Transform; CtfSlot::COUNT],
+    velocities: &mut [Velocity; CtfSlot::COUNT],
     red_flag_tf: &mut Transform,
     blue_flag_tf: &mut Transform,
     flag_motion: &mut FlagMotionState,
     auto_move: &mut AutoMoveState,
     nav_grid: Option<&NavigationGrid>,
+    midline_x: f32,
 ) -> bool {
     let Some(control) = controls
         .controls
@@ -301,6 +342,7 @@ fn apply_frame(
             velocities,
             red_flag_tf,
             blue_flag_tf,
+            midline_x,
         );
         if acted {
             dirty = true;
@@ -320,7 +362,7 @@ fn throw_carried_flag(
     slot: CtfSlot,
     aim_world: Option<(f32, f32)>,
     carrier: &mut CarrierState,
-    player_transforms: &[Transform; 4],
+    player_transforms: &[Transform; CtfSlot::COUNT],
     red_flag_tf: &mut Transform,
     blue_flag_tf: &mut Transform,
     flag_motion: &mut FlagMotionState,
@@ -376,7 +418,7 @@ fn throw_direction(
 
 fn knock_down_own_moving_flag(
     slot: CtfSlot,
-    player_transforms: &[Transform; 4],
+    player_transforms: &[Transform; CtfSlot::COUNT],
     red_flag_tf: &Transform,
     blue_flag_tf: &Transform,
     flag_motion: &mut FlagMotionState,
@@ -419,10 +461,11 @@ fn tag_nearest_opponent(
     tagger: CtfSlot,
     refs: &EntityRefs,
     carrier: &mut CarrierState,
-    player_transforms: &mut [Transform; 4],
-    velocities: &mut [Velocity; 4],
+    player_transforms: &mut [Transform; CtfSlot::COUNT],
+    velocities: &mut [Velocity; CtfSlot::COUNT],
     red_flag_tf: &mut Transform,
     blue_flag_tf: &mut Transform,
+    midline_x: f32,
 ) -> bool {
     let tagger_tf = &player_transforms[tagger.index()];
     let tagger_x = tagger_tf.position.x;
@@ -433,9 +476,9 @@ fn tag_nearest_opponent(
     for opponent in tagger.opponent_slots() {
         let opponent_tf = &player_transforms[opponent.index()];
         let opponent_on_defender_side = if tagger.is_red() {
-            opponent_tf.position.x < MIDLINE_X
+            opponent_tf.position.x < midline_x
         } else {
-            opponent_tf.position.x > MIDLINE_X
+            opponent_tf.position.x > midline_x
         };
         if !opponent_on_defender_side {
             continue;
@@ -489,16 +532,17 @@ mod tests {
     use super::*;
     use crate::ecs::command_buffer::CommandBuffer;
     use crate::game::ctf::resources::{
-        AutoMovePath, AutoMoveState, FlagMotion, FlagMotionState, GamePhase, GameState,
+        AutoMovePath, AutoMoveState, CtfRestartState, FlagMotion, FlagMotionState, GamePhase,
+        GameState,
     };
     use crate::game::ctf::setup::setup_ctf_scene_entities;
     use crate::multiplayer::matchmaking::CtfSlotAssignment;
-    use crate::multiplayer::CtfPointerInput;
+    use crate::multiplayer::{CtfPointerInput, CtfRestartInput};
     use crate::scene::reload_scene;
 
     fn test_world() -> World {
         let mut world = World::new();
-        reload_scene(&mut world, "assets/ctf_scene.json").expect("load CTF scene");
+        reload_scene(&mut world, "assets/ctf_arena_small.json").expect("load CTF scene");
         setup_ctf_scene_entities(
             &mut world,
             &[
@@ -511,6 +555,7 @@ mod tests {
                     primary_slot: CtfSlot::Blue1,
                 },
             ],
+            MapSize::Small,
         );
         world
     }
@@ -526,6 +571,7 @@ mod tests {
                 move_y: 0.0,
                 action_bits: ACTION_SWITCH,
                 ctf_pointer: None,
+                ctf_restart: None,
             }],
         });
 
@@ -565,6 +611,7 @@ mod tests {
                 move_y: 0.0,
                 action_bits: ACTION_TAG,
                 ctf_pointer: None,
+                ctf_restart: None,
             }],
         });
 
@@ -598,6 +645,7 @@ mod tests {
                 move_y: 0.0,
                 action_bits: ACTION_TAG,
                 ctf_pointer: None,
+                ctf_restart: None,
             }],
         });
 
@@ -628,9 +676,10 @@ mod tests {
                 move_y: 0.0,
                 action_bits: ACTION_TAG,
                 ctf_pointer: Some(CtfPointerInput {
-                    aim_world: Some((260.0, 320.0)),
+                    aim_world: Some((260.0, 300.0)),
                     click_world: None,
                 }),
+                ctf_restart: None,
             }],
         });
 
@@ -654,6 +703,13 @@ mod tests {
     #[test]
     fn owner_action_knocks_down_nearby_moving_flag() {
         let mut world = test_world();
+        let refs = world.resource::<EntityRefs>().cloned().expect("refs");
+        let mut red_flag_tf = world
+            .get::<Transform>(refs.red_flag)
+            .cloned()
+            .expect("red flag");
+        red_flag_tf.position.y = 300.0;
+        world.insert(refs.red_flag, red_flag_tf);
         world.insert_resource(FlagMotionState {
             red: Some(FlagMotion {
                 dir_x: 1.0,
@@ -670,6 +726,7 @@ mod tests {
                 move_y: 0.0,
                 action_bits: ACTION_TAG,
                 ctf_pointer: None,
+                ctf_restart: None,
             }],
         });
 
@@ -695,6 +752,7 @@ mod tests {
                     aim_world: Some((260.0, 320.0)),
                     click_world: Some((260.0, 320.0)),
                 }),
+                ctf_restart: None,
             }],
         });
 
@@ -706,6 +764,39 @@ mod tests {
         assert!(auto_move.paths[CtfSlot::Red1.index()]
             .as_ref()
             .is_some_and(|path| !path.waypoints.is_empty()));
+    }
+
+    #[test]
+    fn restart_action_is_ignored_while_playing() {
+        let mut world = test_world();
+        let refs = world.resource::<EntityRefs>().cloned().expect("refs");
+        let red = refs.player(CtfSlot::Red1);
+        let mut red_tf = world.get::<Transform>(red).cloned().expect("red tf");
+        red_tf.position.x = 500.0;
+        red_tf.position.y = 500.0;
+        world.insert(red, red_tf);
+        world.insert_resource(CtfInputState {
+            frames: vec![InputFrame {
+                tick: 1,
+                player_id: 1,
+                move_x: 0.0,
+                move_y: 0.0,
+                action_bits: ACTION_RESTART,
+                ctf_pointer: None,
+                ctf_restart: None,
+            }],
+        });
+
+        let mut commands = CommandBuffer::new();
+        CtfInputSystem.run(&world, &mut commands);
+        commands.flush(&mut world);
+
+        assert!(matches!(
+            world.resource::<GameState>().expect("game state").phase,
+            GamePhase::Playing
+        ));
+        let red_tf = world.get::<Transform>(red).expect("red tf");
+        assert_eq!((red_tf.position.x, red_tf.position.y), (500.0, 500.0));
     }
 
     #[test]
@@ -754,6 +845,7 @@ mod tests {
                 move_y: 0.0,
                 action_bits: ACTION_RESTART,
                 ctf_pointer: None,
+                ctf_restart: None,
             }],
         });
 
@@ -783,5 +875,42 @@ mod tests {
             (blue_flag_tf.position.x, blue_flag_tf.position.y),
             refs.blue_flag_spawn
         );
+    }
+
+    #[test]
+    fn restart_action_requests_selected_level_reload_after_win() {
+        let mut world = test_world();
+        world.insert_resource(GameState {
+            phase: GamePhase::Won(1),
+        });
+        world.insert_resource(CtfRestartState {
+            selected_map_size: MapSize::Medium,
+            pending_reload: None,
+        });
+        world.insert_resource(CtfInputState {
+            frames: vec![InputFrame {
+                tick: 1,
+                player_id: 1,
+                move_x: 0.0,
+                move_y: 0.0,
+                action_bits: ACTION_RESTART,
+                ctf_pointer: None,
+                ctf_restart: Some(CtfRestartInput {
+                    map_size: MapSize::Medium,
+                }),
+            }],
+        });
+
+        let mut commands = CommandBuffer::new();
+        CtfInputSystem.run(&world, &mut commands);
+        commands.flush(&mut world);
+
+        let restart = world.resource::<CtfRestartState>().expect("restart");
+        assert_eq!(restart.selected_map_size, MapSize::Medium);
+        assert_eq!(restart.pending_reload, Some(MapSize::Medium));
+        assert!(matches!(
+            world.resource::<GameState>().expect("game state").phase,
+            GamePhase::Won(1)
+        ));
     }
 }

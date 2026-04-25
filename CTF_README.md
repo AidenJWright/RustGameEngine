@@ -143,8 +143,11 @@ than the networked match flow.
 All networked CTF clients use the same bindings:
 
 - Move: `WASD` or arrow keys
-- Tag: `Space` or `Return`
+- Primary action: `Space` or `Return`
 - Switch owned teammate slot: `Left Shift`
+- Restart match: `R`
+- Aim flag throws: mouse cursor
+- Point-and-click movement: left mouse button
 
 Control ownership depends on team population:
 
@@ -172,8 +175,20 @@ During play:
 - The host chooses each connected player's primary CTF slot in the waiting
   room.
 - Players collide with the saved wall and boundary geometry.
+- Left-clicking sets an A* auto-move path for the player's currently selected
+  CTF slot. Directional keyboard input cancels only that selected slot's path,
+  so a teammate can keep following a path while the player controls another
+  owned slot.
 - Players can pick up only the opposing team's flag.
 - A carrier drags the stolen flag with them.
+- A carrier can press the primary action key to throw the carried flag toward
+  the mouse cursor. The starting throw tuning is 5 tagging radii of distance
+  at 3x player movement speed.
+- A player can press the primary action key near their own moving flag to knock
+  it down and stop it in place.
+- Pressing `R` restarts the current CTF match in-place, resetting player
+  positions, flags, carriers, flag motion, auto-move paths, and win state
+  without closing the game client.
 - A defender can tag any opponent inside the defender's side of the map when
   the opponent is within tag range, whether or not the opponent is carrying a
   flag.

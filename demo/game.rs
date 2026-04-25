@@ -28,7 +28,7 @@ use forge_ecs::ecs::entity::Entity;
 use forge_ecs::ecs::resource::{DeltaTime, ElapsedTime, KeysPressed};
 use forge_ecs::ecs::world::World;
 use forge_ecs::game::ctf::resources::{
-    ControlState, CtfInputState, CtfPointerState, CtfSyncState,
+    ControlState, CtfInputState, CtfPointerState, CtfRestartState, CtfSyncState,
 };
 use forge_ecs::game::ctf::setup::{ctf_camera_entity, setup_ctf_scene_entities};
 use forge_ecs::game::ctf::systems::hud::draw_hud as draw_ctf_hud;
@@ -43,11 +43,11 @@ use forge_ecs::math::Vec3;
 use forge_ecs::messaging::{LoopPhase, MessageBus};
 use forge_ecs::multiplayer;
 use forge_ecs::multiplayer::matchmaking::{
-    self, CtfSlot, CtfSlotAssignment, GameMode, LobbyState, MatchEvent, MatchRequest,
+    self, CtfSlot, CtfSlotAssignment, GameMode, LobbyState, MapSize, MatchEvent, MatchRequest,
 };
 use forge_ecs::multiplayer::{
-    apply_snapshot, capture_snapshot, state_hash, CtfPointerInput, InputFrame, MatchSession,
-    MatchState, NetworkEvent, NetworkResource, DEFAULT_SNAPSHOT_STRIDE,
+    apply_snapshot, capture_snapshot, state_hash, CtfPointerInput, CtfRestartInput, InputFrame,
+    MatchSession, MatchState, NetworkEvent, NetworkResource, DEFAULT_SNAPSHOT_STRIDE,
 };
 use forge_ecs::platform::{
     map_window_event, KeyCode, MouseButton as EngineMouseButton, PlatformEvent,
@@ -200,6 +200,17 @@ fn take_ctf_pointer_input(world: &mut World) -> Option<CtfPointerInput> {
     })
 }
 
+fn ctf_restart_input(world: &World, action_bits: u8) -> Option<CtfRestartInput> {
+    if action_bits & ACTION_RESTART == 0 {
+        return None;
+    }
+
+    let map_size = world
+        .resource::<CtfRestartState>()
+        .map_or(MapSize::Small, |state| state.selected_map_size);
+    Some(CtfRestartInput { map_size })
+}
+
 #[derive(Debug)]
 struct MultiplayerRuntime {
     session: MatchSession,
@@ -294,6 +305,7 @@ struct LauncherRuntime {
     join_code_input: String,
     target_players: u8,
     game_mode: GameMode,
+    map_size: MapSize,
     status_message: String,
     error_message: String,
     connected_matchmaker: Option<SocketAddr>,
@@ -321,6 +333,7 @@ impl LauncherRuntime {
             join_code_input: String::new(),
             target_players: 2,
             game_mode: GameMode::DefaultScene,
+            map_size: MapSize::Small,
             status_message: "Enter username and matchmaker address.".to_string(),
             error_message: String::new(),
             connected_matchmaker: None,
@@ -434,6 +447,7 @@ impl LauncherRuntime {
             game_addr: local_addr.to_string(),
             target_players: self.target_players,
             game_mode: self.game_mode,
+            map_size: self.map_size,
         };
 
         if let Err(error) = self.send_request(request) {
@@ -671,6 +685,7 @@ impl LauncherRuntime {
                 seed,
                 player_endpoints,
                 game_mode,
+                map_size,
                 ctf_assignments,
             } => {
                 let Some(local_player_id) = self.local_player_id else {
@@ -695,6 +710,7 @@ impl LauncherRuntime {
                     players: player_endpoints,
                     start_tick: 0,
                     game_mode,
+                    map_size,
                     ctf_assignments,
                 };
 
@@ -1060,6 +1076,7 @@ impl ApplicationHandler for GameApp {
             // Single-player movement is handled by PlayerInputSystem via bus.
 
             s.bus.run_frame(&mut s.core.world);
+            process_ctf_level_reload(s);
             send_ctf_dirty_snapshot(s);
 
             // Move camera to follow the local player each frame.
@@ -1177,6 +1194,66 @@ fn send_ctf_dirty_snapshot(state: &mut DemoState) {
         .core
         .world
         .insert_resource(CtfSyncState { dirty: false });
+}
+
+fn process_ctf_level_reload(state: &mut DemoState) {
+    if state.game_mode != GameMode::CaptureTheFlag {
+        return;
+    }
+
+    let Some(map_size) = state
+        .core
+        .world
+        .resource::<CtfRestartState>()
+        .and_then(|restart| restart.pending_reload)
+    else {
+        return;
+    };
+
+    let assignments = state
+        .multiplayer
+        .as_ref()
+        .map(|runtime| runtime.session.ctf_assignments().to_vec())
+        .unwrap_or_else(|| {
+            state
+                .core
+                .world
+                .resource::<ControlState>()
+                .map(|controls| {
+                    controls
+                        .controls
+                        .iter()
+                        .map(|control| CtfSlotAssignment {
+                            client_id: control.client_id,
+                            primary_slot: control.primary_slot,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        });
+    let scene_path = map_size.scene_path();
+    reload_scene(&mut state.core.world, scene_path)
+        .unwrap_or_else(|error| panic!("failed to load CTF scene {scene_path}: {error}"));
+    let refs = setup_ctf_scene_entities(&mut state.core.world, &assignments, map_size);
+
+    if let Some(multiplayer) = state.multiplayer.as_mut() {
+        multiplayer.session.set_map_size(map_size);
+    }
+    state.player_entities = assignments
+        .iter()
+        .map(|assignment| (assignment.client_id, refs.player(assignment.primary_slot)))
+        .collect();
+    state.player_slots = state
+        .player_entities
+        .iter()
+        .enumerate()
+        .map(|(slot, (player_id, _))| (*player_id, slot))
+        .collect();
+    state.camera_entity = Some(ctf_camera_entity(&state.core.world));
+    state.camera_pan = Vec3::ZERO;
+    state.camera_middle_dragging = false;
+    state.camera_last_cursor = None;
+    state.core.world.insert_resource(CtfSyncState { dirty: true });
 }
 
 fn update_ctf_cursor_world(state: &mut DemoState, x: f64, y: f64) {
@@ -1418,12 +1495,14 @@ fn initialize_multiplayer_scene(state: &mut DemoState, session: MatchSession) {
 }
 
 fn initialize_multiplayer_ctf_scene(state: &mut DemoState, session: MatchSession) {
-    reload_scene(&mut state.core.world, "assets/ctf_scene.json")
+    let scene_path = session.map_size().scene_path();
+    reload_scene(&mut state.core.world, scene_path)
         .unwrap_or_else(|error| panic!("failed to load CTF scene: {error}"));
 
     let local_player_id = session.local_peer_id();
     let assignments = session.ctf_assignments().to_vec();
-    let refs = setup_ctf_scene_entities(&mut state.core.world, &assignments);
+    let map_size = session.map_size();
+    let refs = setup_ctf_scene_entities(&mut state.core.world, &assignments, map_size);
 
     state.core.world.insert_resource(KeysPressed::default());
     state.bus.register(LoopPhase::Update, -20, CtfInputSystem);
@@ -1566,6 +1645,17 @@ fn draw_launcher_ui(ui: &imgui::Ui, launcher: &mut LauncherRuntime) {
                         }
                     }
 
+                    if launcher.game_mode == GameMode::CaptureTheFlag {
+                        let mut size_idx = MapSize::ALL
+                            .iter()
+                            .position(|&s| s == launcher.map_size)
+                            .unwrap_or(0);
+                        let size_labels = MapSize::ALL.map(MapSize::label);
+                        if ui.combo_simple_string("Map Size", &mut size_idx, &size_labels) {
+                            launcher.map_size = MapSize::ALL[size_idx];
+                        }
+                    }
+
                     let mut target = i32::from(launcher.target_players);
                     let min_players = if launcher.game_mode == GameMode::CaptureTheFlag {
                         2_i32
@@ -1613,6 +1703,9 @@ fn draw_launcher_ui(ui: &imgui::Ui, launcher: &mut LauncherRuntime) {
 
                     if let Some(lobby) = lobby {
                         ui.text(format!("Mode: {:?}", lobby.game_mode));
+                        if lobby.game_mode == GameMode::CaptureTheFlag {
+                            ui.text(format!("Map:  {}", lobby.map_size.label()));
+                        }
                         ui.text(format!(
                             "Players: {}/{}",
                             lobby.players.len(),
@@ -1681,7 +1774,8 @@ fn draw_ctf_assignment_ui(ui: &imgui::Ui, launcher: &mut LauncherRuntime, lobby:
     let mut players = lobby.players.clone();
     players.sort_by_key(|player| player.client_id);
     let mut assignments = normalized_ctf_assignments(lobby);
-    let slot_labels = CtfSlot::ALL.map(CtfSlot::label);
+    let assignment_slots = CtfSlot::ASSIGNMENT_SLOTS;
+    let slot_labels = assignment_slots.map(CtfSlot::assignment_label);
     let is_host = launcher.is_host();
     let mut changed = false;
 
@@ -1691,11 +1785,14 @@ fn draw_ctf_assignment_ui(ui: &imgui::Ui, launcher: &mut LauncherRuntime, lobby:
             .position(|assignment| assignment.client_id == player.client_id)
             .expect("normalized assignment exists");
         let old_slot = assignments[assignment_index].primary_slot;
-        let mut slot_index = old_slot.index();
+        let mut slot_index = assignment_slots
+            .iter()
+            .position(|slot| *slot == old_slot)
+            .unwrap_or(0);
         if is_host {
             let label = format!("{}##slot_{}", player.name, player.client_id);
             if ui.combo_simple_string(&label, &mut slot_index, &slot_labels) {
-                let new_slot = CtfSlot::ALL[slot_index];
+                let new_slot = assignment_slots[slot_index];
                 if new_slot != old_slot {
                     if let Some(other) = assignments
                         .iter_mut()
@@ -1708,7 +1805,7 @@ fn draw_ctf_assignment_ui(ui: &imgui::Ui, launcher: &mut LauncherRuntime, lobby:
                 }
             }
         } else {
-            ui.bullet_text(format!("{}: {}", player.name, old_slot.label()));
+            ui.bullet_text(format!("{}: {}", player.name, old_slot.assignment_label()));
         }
     }
 
@@ -1720,10 +1817,11 @@ fn draw_ctf_assignment_ui(ui: &imgui::Ui, launcher: &mut LauncherRuntime, lobby:
 fn normalized_ctf_assignments(lobby: &LobbyState) -> Vec<CtfSlotAssignment> {
     let mut assignments = lobby.ctf_assignments.clone();
     assignments.retain(|assignment| {
-        lobby
-            .players
-            .iter()
-            .any(|player| player.client_id == assignment.client_id)
+        assignment.primary_slot.is_assignment_slot()
+            && lobby
+                .players
+                .iter()
+                .any(|player| player.client_id == assignment.client_id)
     });
 
     for player in &lobby.players {
@@ -1733,7 +1831,7 @@ fn normalized_ctf_assignments(lobby: &LobbyState) -> Vec<CtfSlotAssignment> {
         {
             continue;
         }
-        let slot = CtfSlot::ALL
+        let slot = CtfSlot::ASSIGNMENT_SLOTS
             .iter()
             .copied()
             .find(|slot| {
@@ -1837,6 +1935,7 @@ fn apply_multiplayer_tick(
             move_y,
             action_bits,
             ctf_pointer,
+            ctf_restart: ctf_restart_input(world, action_bits),
         };
 
         runtime.session.enqueue_local_input(input.clone());
@@ -1976,7 +2075,7 @@ fn render(s: &mut DemoState) {
         );
     } else if s.scene_initialized && s.game_mode == GameMode::CaptureTheFlag {
         let ui = s.core.imgui.begin_frame(s.core.platform.window());
-        draw_ctf_hud(ui, &s.core.world);
+        draw_ctf_hud(ui, &mut s.core.world);
         s.core.imgui.end_frame(
             s.core.platform.window(),
             &s.core.render_ctx.device,
@@ -2091,6 +2190,7 @@ fn bootstrap_session(
                     game_addr: game_addr.clone(),
                     target_players: 4,
                     game_mode: GameMode::DefaultScene,
+                    map_size: MapSize::Small,
                 },
             )?;
 
@@ -2229,6 +2329,7 @@ fn await_match_start(
                 seed,
                 player_endpoints,
                 game_mode,
+                map_size,
                 ctf_assignments,
             }) => {
                 if started_code == lobby_code {
@@ -2239,6 +2340,7 @@ fn await_match_start(
                         players: player_endpoints,
                         start_tick: 0,
                         game_mode,
+                        map_size,
                         ctf_assignments,
                     });
                 }

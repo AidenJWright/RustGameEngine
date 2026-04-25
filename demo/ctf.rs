@@ -17,7 +17,7 @@ use forge_ecs::app::AppCore;
 use forge_ecs::components::{Color, Shape, Transform};
 use forge_ecs::ecs::resource::{DeltaTime, ElapsedTime, KeysPressed};
 use forge_ecs::ecs::world::World;
-use forge_ecs::game::ctf::resources::{CtfInputState, CtfPointerState};
+use forge_ecs::game::ctf::resources::{CtfInputState, CtfPointerState, CtfRestartState};
 use forge_ecs::game::ctf::setup::setup_ctf_scene_entities;
 use forge_ecs::game::ctf::systems::hud::draw_hud;
 use forge_ecs::game::ctf::systems::{
@@ -29,14 +29,12 @@ use forge_ecs::game::ctf::{
     SWITCH_KEY,
 };
 use forge_ecs::messaging::{LoopPhase, MessageBus};
-use forge_ecs::multiplayer::matchmaking::{CtfSlot, CtfSlotAssignment};
-use forge_ecs::multiplayer::{CtfPointerInput, InputFrame};
+use forge_ecs::multiplayer::matchmaking::{CtfSlot, CtfSlotAssignment, MapSize};
+use forge_ecs::multiplayer::{CtfPointerInput, CtfRestartInput, InputFrame};
 use forge_ecs::platform::{map_window_event, KeyCode, MouseButton, PlatformEvent};
 use forge_ecs::renderer::draw::DrawCommand;
 use forge_ecs::scene::reload_scene;
 use forge_ecs::systems::MovementSystem;
-
-const SCENE_PATH: &str = "assets/ctf_scene.json";
 
 fn main() {
     let event_loop = EventLoop::new().expect("failed to create event loop");
@@ -53,6 +51,10 @@ struct CtfState {
     bus: MessageBus,
     last_time: Instant,
     cursor_screen: Option<(f64, f64)>,
+    /// Index into `MapSize::ALL`; drives the pre-game selector.
+    selected_map_idx: usize,
+    /// False until the player confirms a map choice and the world is loaded.
+    game_started: bool,
 }
 
 impl ApplicationHandler for CtfApp {
@@ -68,15 +70,16 @@ impl ApplicationHandler for CtfApp {
         let window: Window = event_loop
             .create_window(attrs)
             .expect("window creation failed");
-        let mut core = AppCore::from_window(window).expect("AppCore creation failed");
+        let core = AppCore::from_window(window).expect("AppCore creation failed");
 
-        setup_ctf_world(&mut core.world);
-
+        // World setup is deferred until the player selects a map size.
         self.state = Some(CtfState {
             core,
             bus: build_bus(),
             last_time: Instant::now(),
             cursor_screen: None,
+            selected_map_idx: 0,
+            game_started: false,
         });
     }
 
@@ -175,15 +178,18 @@ impl ApplicationHandler for CtfApp {
         let dt = now.duration_since(state.last_time).as_secs_f32();
         state.last_time = now;
 
-        if let Some(resource) = state.core.world.resource_mut::<DeltaTime>() {
-            resource.0 = dt;
-        }
-        if let Some(resource) = state.core.world.resource_mut::<ElapsedTime>() {
-            resource.0 += dt;
+        if state.game_started {
+            if let Some(resource) = state.core.world.resource_mut::<DeltaTime>() {
+                resource.0 = dt;
+            }
+            if let Some(resource) = state.core.world.resource_mut::<ElapsedTime>() {
+                resource.0 += dt;
+            }
+            queue_local_debug_inputs(&mut state.core.world);
+            state.bus.run_frame(&mut state.core.world);
+            process_ctf_level_reload(state);
         }
 
-        queue_local_debug_inputs(&mut state.core.world);
-        state.bus.run_frame(&mut state.core.world);
         state.core.platform.window.request_redraw();
     }
 }
@@ -202,9 +208,10 @@ fn build_bus() -> MessageBus {
     bus
 }
 
-fn setup_ctf_world(world: &mut World) {
-    reload_scene(world, SCENE_PATH).unwrap_or_else(|err| {
-        panic!("failed to load {SCENE_PATH}: {err}");
+fn setup_ctf_world(world: &mut World, map: MapSize) {
+    let path = map.scene_path();
+    reload_scene(world, path).unwrap_or_else(|err| {
+        panic!("failed to load {path}: {err}");
     });
 
     world.insert_resource(KeysPressed::default());
@@ -220,6 +227,7 @@ fn setup_ctf_world(world: &mut World) {
                 primary_slot: CtfSlot::Blue1,
             },
         ],
+        map,
     );
 }
 
@@ -243,6 +251,7 @@ fn queue_local_debug_inputs(world: &mut World) {
             | (if switch { ACTION_SWITCH } else { 0 })
             | (if restart { ACTION_RESTART } else { 0 }),
         ctf_pointer: pointer_input,
+        ctf_restart: ctf_restart_input(world, restart),
     });
     frames.push(InputFrame {
         tick: 0,
@@ -256,8 +265,19 @@ fn queue_local_debug_inputs(world: &mut World) {
             aim_world: pointer.aim_world,
             click_world: None,
         }),
+        ctf_restart: ctf_restart_input(world, restart),
     });
     world.insert_resource(CtfInputState { frames });
+}
+
+fn ctf_restart_input(world: &World, restart: bool) -> Option<CtfRestartInput> {
+    if !restart {
+        return None;
+    }
+    let map_size = world
+        .resource::<CtfRestartState>()
+        .map_or(MapSize::Small, |state| state.selected_map_size);
+    Some(CtfRestartInput { map_size })
 }
 
 fn take_ctf_pointer_input(world: &mut World) -> Option<CtfPointerInput> {
@@ -298,16 +318,18 @@ fn render(state: &mut CtfState) {
         .render_ctx
         .sync_with_window(state.core.platform.window());
 
-    state
-        .core
-        .world
-        .query3::<Transform, Shape, Color>()
-        .for_each(|(_, transform, shape, color)| {
-            state
-                .core
-                .draw_queue
-                .push(make_draw_cmd(transform, shape, color));
-        });
+    if state.game_started {
+        state
+            .core
+            .world
+            .query3::<Transform, Shape, Color>()
+            .for_each(|(_, transform, shape, color)| {
+                state
+                    .core
+                    .draw_queue
+                    .push(make_draw_cmd(transform, shape, color));
+            });
+    }
 
     let Some((surface_texture, view)) = state.core.render_ctx.begin_frame() else {
         return;
@@ -331,9 +353,15 @@ fn render(state: &mut CtfState) {
         [0.08, 0.09, 0.10, 1.0],
     );
 
+    // Use a flag to defer world loading until after the imgui borrow ends.
+    let mut start_game = false;
     {
         let ui = state.core.imgui.begin_frame(state.core.platform.window());
-        draw_hud(ui, &state.core.world);
+        if state.game_started {
+            draw_hud(ui, &mut state.core.world);
+        } else {
+            draw_map_selection(ui, &mut state.selected_map_idx, &mut start_game);
+        }
         state.core.imgui.end_frame(
             state.core.platform.window(),
             &state.core.render_ctx.device,
@@ -342,6 +370,11 @@ fn render(state: &mut CtfState) {
             &view,
         );
     }
+    if start_game {
+        let map = MapSize::ALL[state.selected_map_idx];
+        setup_ctf_world(&mut state.core.world, map);
+        state.game_started = true;
+    }
 
     state
         .core
@@ -349,6 +382,26 @@ fn render(state: &mut CtfState) {
         .queue
         .submit(std::iter::once(encoder.finish()));
     state.core.render_ctx.end_frame(surface_texture);
+}
+
+fn draw_map_selection(ui: &imgui::Ui, selected_idx: &mut usize, start_game: &mut bool) {
+    let [w, h] = ui.io().display_size;
+    let win_w = 300.0_f32;
+    let win_h = 120.0_f32;
+    ui.window("Select Map")
+        .size([win_w, win_h], imgui::Condition::Always)
+        .position([(w - win_w) * 0.5, (h - win_h) * 0.5], imgui::Condition::Always)
+        .resizable(false)
+        .collapsible(false)
+        .build(|| {
+            let labels = MapSize::ALL.map(MapSize::label);
+            ui.combo_simple_string("Map Size", selected_idx, &labels);
+
+            ui.separator();
+            if ui.button("Play") {
+                *start_game = true;
+            }
+        });
 }
 
 fn make_draw_cmd(transform: &Transform, shape: &Shape, color: &Color) -> DrawCommand {
@@ -376,6 +429,23 @@ fn make_draw_cmd(transform: &Transform, shape: &Shape, color: &Color) -> DrawCom
     }
 }
 
+fn process_ctf_level_reload(state: &mut CtfState) {
+    let Some(map_size) = state
+        .core
+        .world
+        .resource::<CtfRestartState>()
+        .and_then(|restart| restart.pending_reload)
+    else {
+        return;
+    };
+
+    setup_ctf_world(&mut state.core.world, map_size);
+    state.selected_map_idx = MapSize::ALL
+        .iter()
+        .position(|candidate| *candidate == map_size)
+        .unwrap_or(0);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,10 +455,10 @@ mod tests {
     #[test]
     fn setup_resolves_ctf_scene_entities() {
         let mut world = World::new();
-        setup_ctf_world(&mut world);
+        setup_ctf_world(&mut world, MapSize::Small);
 
         assert!(world.resource::<EntityRefs>().is_some());
-        assert_eq!(world.query::<PlayerMarker>().count(), 4);
+        assert_eq!(world.query::<PlayerMarker>().count(), 8);
         assert_eq!(world.query::<Flag>().count(), 2);
         assert_eq!(world.query::<Wall>().count(), 16);
     }

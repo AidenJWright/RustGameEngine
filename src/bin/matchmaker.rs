@@ -13,7 +13,7 @@ use rand::Rng;
 
 use forge_ecs::multiplayer::matchmaking::{
     deserialize_request, send_match_event, CtfSlot, CtfSlotAssignment, GameMode, LobbyState,
-    MatchEvent, MatchRequest, PlayerInfo, MAX_PLAYERS,
+    MapSize, MatchEvent, MatchRequest, PlayerInfo, MAX_PLAYERS,
 };
 
 const MATCHMAKER_TICK_MS: u64 = 125;
@@ -56,6 +56,8 @@ struct Lobby {
     target_players: usize,
     /// Game mode selected when the lobby was created.
     game_mode: GameMode,
+    /// CTF arena size selected when the lobby was created.
+    map_size: MapSize,
     /// Host-selected CTF assignments.
     ctf_assignments: Vec<CtfSlotAssignment>,
     /// Instant when required player threshold was reached.
@@ -135,6 +137,7 @@ fn process_tick(
             game_addr,
             target_players,
             game_mode,
+            map_size,
         } => {
             match create_lobby(
                 lobbies,
@@ -144,6 +147,7 @@ fn process_tick(
                 game_addr,
                 target_players,
                 game_mode,
+                map_size,
             ) {
                 Ok((lobby_code, player_id, lobby_state)) => {
                     send_match_event(
@@ -323,6 +327,7 @@ fn create_lobby(
     game_addr: String,
     target_players: u8,
     game_mode: GameMode,
+    map_size: MapSize,
 ) -> io::Result<(String, u64, LobbyState)> {
     let target_players = validate_target_players(target_players, game_mode)?;
 
@@ -354,6 +359,7 @@ fn create_lobby(
         host_client_id: Some(client_id),
         target_players,
         game_mode,
+        map_size: if game_mode == GameMode::CaptureTheFlag { map_size } else { MapSize::Small },
         ctf_assignments: if game_mode == GameMode::CaptureTheFlag {
             vec![CtfSlotAssignment {
                 client_id,
@@ -629,6 +635,7 @@ fn try_start_match(
         seed: lobby.shared_seed,
         player_endpoints: endpoints,
         game_mode: lobby.game_mode,
+        map_size: lobby.map_size,
         ctf_assignments: lobby.ctf_assignments.clone(),
     };
 
@@ -737,6 +744,7 @@ fn lobby_state_for(lobby: &Lobby) -> LobbyState {
         target_players: lobby.target_players as u8,
         countdown_seconds: countdown_seconds_remaining(lobby),
         game_mode: lobby.game_mode,
+        map_size: lobby.map_size,
         ctf_assignments: lobby.ctf_assignments.clone(),
     }
 }
@@ -768,7 +776,7 @@ fn assign_default_ctf_slot(lobby: &mut Lobby, client_id: u64) {
     {
         return;
     }
-    let Some(slot) = CtfSlot::ALL
+    let Some(slot) = CtfSlot::ASSIGNMENT_SLOTS
         .iter()
         .copied()
         .find(|slot| {
@@ -818,6 +826,8 @@ fn validate_ctf_assignments(
     let mut seen_slots = std::collections::HashSet::new();
     let mut has_red = false;
     let mut has_blue = false;
+    let mut red_count = 0_usize;
+    let mut blue_count = 0_usize;
 
     for assignment in assignments {
         if !lobby.players.contains_key(&assignment.client_id) {
@@ -832,14 +842,32 @@ fn validate_ctf_assignments(
                 "duplicate CTF player assignment",
             ));
         }
+        if !assignment.primary_slot.is_assignment_slot() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "CTF assignments must choose a two-entity control group",
+            ));
+        }
         if !seen_slots.insert(assignment.primary_slot) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "duplicate CTF slot assignment",
             ));
         }
-        has_red |= assignment.primary_slot.is_red();
-        has_blue |= !assignment.primary_slot.is_red();
+        if assignment.primary_slot.is_red() {
+            has_red = true;
+            red_count += 1;
+        } else {
+            has_blue = true;
+            blue_count += 1;
+        }
+    }
+
+    if red_count > 2 || blue_count > 2 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "CTF allows at most two players per team",
+        ));
     }
 
     if require_start_ready && (!has_red || !has_blue) {
@@ -979,6 +1007,7 @@ mod tests {
             host_client_id: Some(1),
             target_players,
             game_mode: GameMode::DefaultScene,
+            map_size: MapSize::Small,
             ctf_assignments: Vec::new(),
             target_reached_at: reached_ago.map(|duration| now - duration),
             last_countdown_sent: None,
@@ -1045,7 +1074,7 @@ mod tests {
                 },
                 CtfSlotAssignment {
                     client_id: 2,
-                    primary_slot: CtfSlot::Red2,
+                    primary_slot: CtfSlot::Red3,
                 },
             ],
         );
@@ -1110,11 +1139,11 @@ mod tests {
             vec![
                 CtfSlotAssignment {
                     client_id: 1,
-                    primary_slot: CtfSlot::Red2,
+                    primary_slot: CtfSlot::Red3,
                 },
                 CtfSlotAssignment {
                     client_id: 2,
-                    primary_slot: CtfSlot::Blue2,
+                    primary_slot: CtfSlot::Blue3,
                 },
             ],
         )

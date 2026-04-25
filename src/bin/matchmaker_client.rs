@@ -7,7 +7,7 @@ use std::time::Duration;
 use clap::{Parser, Subcommand};
 
 use forge_ecs::multiplayer::matchmaking::{
-    deserialize_request, serialize_request, GameMode, MatchEvent, MatchRequest,
+    deserialize_request, serialize_request, GameMode, MapSize, MatchEvent, MatchRequest,
 };
 
 #[derive(Debug, Parser)]
@@ -84,6 +84,7 @@ fn main() {
                 game_addr,
                 target_players,
                 game_mode: GameMode::DefaultScene,
+                map_size: MapSize::Small,
             },
             true,
         ),
@@ -244,6 +245,7 @@ fn print_event(event: &MatchEvent) {
             player_endpoints,
             game_mode,
             ctf_assignments,
+            ..
         } => {
             println!("kind=match_start");
             println!("lobby_code={lobby_code}");

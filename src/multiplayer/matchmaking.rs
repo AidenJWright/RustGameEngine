@@ -20,26 +20,101 @@ pub enum GameMode {
     CaptureTheFlag,
 }
 
+/// CTF arena size selected for a lobby.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MapSize {
+    /// 1280 × 720 — original arena (1× area).
+    #[default]
+    Small,
+    /// 2560 × 1440 — 4× area.
+    Medium,
+    /// 3840 × 2160 — 9× area.
+    Large,
+}
+
+impl MapSize {
+    pub const ALL: [Self; 3] = [Self::Small, Self::Medium, Self::Large];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Small  => "Small  (1280 × 720)",
+            Self::Medium => "Medium (2560 × 1440)",
+            Self::Large  => "Large  (3840 × 2160)",
+        }
+    }
+
+    pub fn scene_path(self) -> &'static str {
+        match self {
+            Self::Small  => "assets/ctf_arena_small.json",
+            Self::Medium => "assets/ctf_arena_medium.json",
+            Self::Large  => "assets/ctf_arena_large.json",
+        }
+    }
+
+    /// World-space dimensions (width, height) for this arena.
+    pub fn dimensions(self) -> (f32, f32) {
+        match self {
+            Self::Small  => (1280.0,  720.0),
+            Self::Medium => (2560.0, 1440.0),
+            Self::Large  => (3840.0, 2160.0),
+        }
+    }
+
+    /// X coordinate of the mid-line separating the two teams.
+    pub fn midline_x(self) -> f32 {
+        self.dimensions().0 * 0.5
+    }
+}
+
 /// Fixed CTF scene slot.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CtfSlot {
     Red1,
     Red2,
+    Red3,
+    Red4,
     Blue1,
     Blue2,
+    Blue3,
+    Blue4,
 }
 
 impl CtfSlot {
-    pub const ALL: [Self; 4] = [Self::Red1, Self::Red2, Self::Blue1, Self::Blue2];
-    pub const RED: [Self; 2] = [Self::Red1, Self::Red2];
-    pub const BLUE: [Self; 2] = [Self::Blue1, Self::Blue2];
+    pub const COUNT: usize = 8;
+    pub const ALL: [Self; Self::COUNT] = [
+        Self::Red1,
+        Self::Red2,
+        Self::Red3,
+        Self::Red4,
+        Self::Blue1,
+        Self::Blue2,
+        Self::Blue3,
+        Self::Blue4,
+    ];
+    pub const RED: [Self; 4] = [Self::Red1, Self::Red2, Self::Red3, Self::Red4];
+    pub const BLUE: [Self; 4] = [Self::Blue1, Self::Blue2, Self::Blue3, Self::Blue4];
+    pub const ASSIGNMENT_SLOTS: [Self; 4] =
+        [Self::Red1, Self::Blue1, Self::Red3, Self::Blue3];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Red1 => "Red 1",
             Self::Red2 => "Red 2",
+            Self::Red3 => "Red 3",
+            Self::Red4 => "Red 4",
             Self::Blue1 => "Blue 1",
             Self::Blue2 => "Blue 2",
+            Self::Blue3 => "Blue 3",
+            Self::Blue4 => "Blue 4",
+        }
+    }
+
+    pub fn assignment_label(self) -> &'static str {
+        match self {
+            Self::Red1 | Self::Red2 => "Red A",
+            Self::Red3 | Self::Red4 => "Red B",
+            Self::Blue1 | Self::Blue2 => "Blue A",
+            Self::Blue3 | Self::Blue4 => "Blue B",
         }
     }
 
@@ -47,8 +122,12 @@ impl CtfSlot {
         match self {
             Self::Red1 => "ctf_player_red_1",
             Self::Red2 => "ctf_player_red_2",
+            Self::Red3 => "ctf_player_red_3",
+            Self::Red4 => "ctf_player_red_4",
             Self::Blue1 => "ctf_player_blue_1",
             Self::Blue2 => "ctf_player_blue_2",
+            Self::Blue3 => "ctf_player_blue_3",
+            Self::Blue4 => "ctf_player_blue_4",
         }
     }
 
@@ -56,13 +135,21 @@ impl CtfSlot {
         match self {
             Self::Red1 => 0,
             Self::Red2 => 1,
-            Self::Blue1 => 2,
-            Self::Blue2 => 3,
+            Self::Red3 => 2,
+            Self::Red4 => 3,
+            Self::Blue1 => 4,
+            Self::Blue2 => 5,
+            Self::Blue3 => 6,
+            Self::Blue4 => 7,
         }
     }
 
     pub fn is_red(self) -> bool {
-        matches!(self, Self::Red1 | Self::Red2)
+        matches!(self, Self::Red1 | Self::Red2 | Self::Red3 | Self::Red4)
+    }
+
+    pub fn is_assignment_slot(self) -> bool {
+        matches!(self, Self::Red1 | Self::Red3 | Self::Blue1 | Self::Blue3)
     }
 
     pub fn team_id(self) -> u8 {
@@ -73,7 +160,7 @@ impl CtfSlot {
         }
     }
 
-    pub fn teammate_slots(self) -> &'static [Self; 2] {
+    pub fn teammate_slots(self) -> &'static [Self; 4] {
         if self.is_red() {
             &Self::RED
         } else {
@@ -81,7 +168,16 @@ impl CtfSlot {
         }
     }
 
-    pub fn opponent_slots(self) -> &'static [Self; 2] {
+    pub fn control_pair(self) -> [Self; 2] {
+        match self {
+            Self::Red1 | Self::Red2 => [Self::Red1, Self::Red2],
+            Self::Red3 | Self::Red4 => [Self::Red3, Self::Red4],
+            Self::Blue1 | Self::Blue2 => [Self::Blue1, Self::Blue2],
+            Self::Blue3 | Self::Blue4 => [Self::Blue3, Self::Blue4],
+        }
+    }
+
+    pub fn opponent_slots(self) -> &'static [Self; 4] {
         if self.is_red() {
             &Self::BLUE
         } else {
@@ -112,6 +208,8 @@ pub enum MatchRequest {
         target_players: u8,
         /// Selected game mode.
         game_mode: GameMode,
+        /// CTF arena size (ignored for non-CTF modes).
+        map_size: MapSize,
     },
     /// Join an existing lobby by code.
     JoinLobby {
@@ -186,6 +284,7 @@ pub enum MatchEvent {
         player_endpoints: Vec<PlayerInfo>,
         game_mode: GameMode,
         ctf_assignments: Vec<CtfSlotAssignment>,
+        map_size: MapSize,
     },
     /// Error response for invalid request.
     Error { message: String },
@@ -219,6 +318,8 @@ pub struct LobbyState {
     pub countdown_seconds: Option<u64>,
     /// Selected game mode.
     pub game_mode: GameMode,
+    /// CTF arena size selected by the host.
+    pub map_size: MapSize,
     /// Host-selected CTF slots. Empty for non-CTF lobbies.
     pub ctf_assignments: Vec<CtfSlotAssignment>,
 }
@@ -279,6 +380,7 @@ mod tests {
             target_players: 4,
             countdown_seconds: Some(3),
             game_mode: GameMode::CaptureTheFlag,
+            map_size: MapSize::Medium,
             ctf_assignments: vec![CtfSlotAssignment {
                 client_id: 9,
                 primary_slot: CtfSlot::Red1,
@@ -290,6 +392,7 @@ mod tests {
         assert_eq!(decoded.target_players, 4);
         assert_eq!(decoded.countdown_seconds, Some(3));
         assert_eq!(decoded.game_mode, GameMode::CaptureTheFlag);
+        assert_eq!(decoded.map_size, MapSize::Medium);
         assert_eq!(decoded.ctf_assignments[0].primary_slot, CtfSlot::Red1);
     }
 }

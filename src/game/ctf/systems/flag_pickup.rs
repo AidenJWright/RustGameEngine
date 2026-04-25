@@ -58,7 +58,7 @@ impl System for FlagPickupSystem {
 fn first_overlapping_slot(
     world: &World,
     refs: &EntityRefs,
-    slots: &[CtfSlot; 2],
+    slots: &[CtfSlot],
     flag_tf: &Transform,
     pickup_range_sq: f32,
 ) -> Option<CtfSlot> {

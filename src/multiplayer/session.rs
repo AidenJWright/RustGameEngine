@@ -14,7 +14,7 @@ use super::net_types::{
     DesyncMode, MatchState, NetMessage, NetworkEvent, NetworkPolicy, NetworkTick, PlayerInputFrame,
     SyncMode,
 };
-use crate::multiplayer::matchmaking::{CtfSlotAssignment, GameMode};
+use crate::multiplayer::matchmaking::{CtfSlotAssignment, GameMode, MapSize};
 
 /// Internal role derived from lobby/host-election outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +35,7 @@ pub struct MatchSession {
     host_peer_id: u64,
     players: Vec<PlayerInfo>,
     game_mode: GameMode,
+    map_size: MapSize,
     ctf_assignments: Vec<CtfSlotAssignment>,
     shared_seed: u64,
     socket: UdpSocket,
@@ -156,6 +157,7 @@ impl MatchSession {
             host_peer_id: state.host_peer_id,
             players: state.players,
             game_mode: state.game_mode,
+            map_size: state.map_size,
             ctf_assignments: state.ctf_assignments,
             shared_seed: state.shared_seed,
             socket,
@@ -206,6 +208,16 @@ impl MatchSession {
     /// CTF slot assignments selected by the lobby host.
     pub fn ctf_assignments(&self) -> &[CtfSlotAssignment] {
         &self.ctf_assignments
+    }
+
+    /// CTF arena size selected by the lobby host.
+    pub fn map_size(&self) -> MapSize {
+        self.map_size
+    }
+
+    /// Update the active CTF arena size after an in-match level restart.
+    pub fn set_map_size(&mut self, map_size: MapSize) {
+        self.map_size = map_size;
     }
 
     /// Current tick counter.

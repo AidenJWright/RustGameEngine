@@ -9,7 +9,7 @@ use crate::game::ctf::resources::{
     AutoMovePath, AutoMoveState, CarrierState, ControlState, FlagMotion, FlagMotionState,
     GamePhase, GameState,
 };
-use crate::multiplayer::matchmaking::CtfSlotAssignment;
+use crate::multiplayer::matchmaking::{CtfSlot, CtfSlotAssignment};
 
 use super::net_types::{
     CtfAutoMovePathSnapshot, CtfFlagMotionSnapshot, CtfSnapshotState, EntityStatePacket,
@@ -271,7 +271,7 @@ fn capture_auto_paths(auto_move: &AutoMoveState) -> Vec<CtfAutoMovePathSnapshot>
 
 fn restore_auto_paths(
     paths: &[CtfAutoMovePathSnapshot],
-) -> [Option<AutoMovePath>; 4] {
+) -> [Option<AutoMovePath>; CtfSlot::COUNT] {
     let mut restored = std::array::from_fn(|_| None);
     for path in paths {
         restored[path.slot.index()] = Some(AutoMovePath {
@@ -310,7 +310,7 @@ mod tests {
     };
     use crate::game::ctf::setup::setup_ctf_scene_entities;
     use crate::math::Vec3;
-    use crate::multiplayer::matchmaking::{CtfSlot, CtfSlotAssignment};
+    use crate::multiplayer::matchmaking::{CtfSlot, CtfSlotAssignment, MapSize};
     use crate::scene::reload_scene;
 
     #[test]
@@ -343,7 +343,7 @@ mod tests {
     #[test]
     fn ctf_snapshot_round_trips_resource_state() {
         let mut world = World::new();
-        reload_scene(&mut world, "assets/ctf_scene.json").expect("load CTF scene");
+        reload_scene(&mut world, "assets/ctf_arena_small.json").expect("load CTF scene");
         setup_ctf_scene_entities(
             &mut world,
             &[
@@ -356,6 +356,7 @@ mod tests {
                     primary_slot: CtfSlot::Blue1,
                 },
             ],
+            MapSize::Small,
         );
 
         world.insert_resource(GameState {

@@ -7,14 +7,15 @@ use crate::game::ctf::components::{Flag, PlayerMarker, Wall};
 use crate::game::ctf::nav::build_navigation_grid;
 use crate::game::ctf::resources::{
     AutoMoveState, CarrierState, ControlState, CtfInputState, CtfPointerState, CtfSyncState,
-    EntityRefs, FlagMotionState, GameState, PlayerControl,
+    CtfRestartState, EntityRefs, FlagMotionState, GameState, PlayerControl,
 };
-use crate::multiplayer::matchmaking::{CtfSlot, CtfSlotAssignment};
+use crate::multiplayer::matchmaking::{CtfSlot, CtfSlotAssignment, MapSize};
 
 /// Attach CTF runtime metadata to scene-authored CTF entities.
 pub fn setup_ctf_scene_entities(
     world: &mut World,
     assignments: &[CtfSlotAssignment],
+    map_size: MapSize,
 ) -> EntityRefs {
     let red_flag = find_tag(world, "ctf_flag_red");
     let blue_flag = find_tag(world, "ctf_flag_blue");
@@ -46,11 +47,17 @@ pub fn setup_ctf_scene_entities(
         blue_flag_spawn,
     };
 
+    let (arena_w, arena_h) = map_size.dimensions();
     world.insert_resource(GameState::default());
     world.insert_resource(CarrierState::default());
     world.insert_resource(FlagMotionState::default());
     world.insert_resource(AutoMoveState::default());
-    world.insert_resource(build_navigation_grid(&wall_rects(world)));
+    world.insert_resource(build_navigation_grid(&wall_rects(world), arena_w, arena_h));
+    world.insert_resource(map_size);
+    world.insert_resource(CtfRestartState {
+        selected_map_size: map_size,
+        pending_reload: None,
+    });
     world.insert_resource(build_control_state(assignments));
     world.insert_resource(CtfInputState::default());
     world.insert_resource(CtfPointerState::default());
@@ -82,7 +89,7 @@ fn build_control_state(assignments: &[CtfSlotAssignment]) -> ControlState {
             let owned_slots = if team_count == 1 {
                 assignment.primary_slot.teammate_slots().to_vec()
             } else {
-                vec![assignment.primary_slot]
+                assignment.primary_slot.control_pair().to_vec()
             };
             PlayerControl {
                 client_id: assignment.client_id,
@@ -164,7 +171,7 @@ mod tests {
     #[test]
     fn resolves_scene_authored_ctf_entities() {
         let mut world = World::new();
-        reload_scene(&mut world, "assets/ctf_scene.json").expect("load CTF scene");
+        reload_scene(&mut world, "assets/ctf_arena_small.json").expect("load CTF scene");
         setup_ctf_scene_entities(
             &mut world,
             &[
@@ -177,16 +184,17 @@ mod tests {
                     primary_slot: CtfSlot::Blue1,
                 },
             ],
+            MapSize::Small,
         );
 
-        assert_eq!(world.query::<PlayerMarker>().count(), 4);
+        assert_eq!(world.query::<PlayerMarker>().count(), 8);
         assert_eq!(world.query::<Flag>().count(), 2);
         assert_eq!(world.query::<Wall>().count(), 16);
         assert_eq!(world.query::<Camera>().count(), 1);
     }
 
     #[test]
-    fn single_human_team_controls_both_team_slots() {
+    fn single_human_team_controls_all_team_slots() {
         let controls = build_control_state(&[
             CtfSlotAssignment {
                 client_id: 1,
@@ -198,7 +206,7 @@ mod tests {
             },
             CtfSlotAssignment {
                 client_id: 3,
-                primary_slot: CtfSlot::Blue2,
+                primary_slot: CtfSlot::Blue3,
             },
         ]);
 
@@ -212,7 +220,10 @@ mod tests {
             .iter()
             .find(|control| control.client_id == 2)
             .expect("blue control");
-        assert_eq!(red.owned_slots, vec![CtfSlot::Red1, CtfSlot::Red2]);
-        assert_eq!(blue.owned_slots, vec![CtfSlot::Blue1]);
+        assert_eq!(
+            red.owned_slots,
+            vec![CtfSlot::Red1, CtfSlot::Red2, CtfSlot::Red3, CtfSlot::Red4]
+        );
+        assert_eq!(blue.owned_slots, vec![CtfSlot::Blue1, CtfSlot::Blue2]);
     }
 }

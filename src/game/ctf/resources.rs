@@ -1,7 +1,7 @@
 //! Runtime resources for capture the flag.
 
 use crate::ecs::entity::Entity;
-use crate::multiplayer::matchmaking::{CtfSlot, CtfSlotAssignment};
+use crate::multiplayer::matchmaking::{CtfSlot, CtfSlotAssignment, MapSize};
 
 /// High-level CTF match phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,8 +27,8 @@ impl Default for GameState {
 /// Stable entity references and spawn positions resolved during setup.
 #[derive(Debug, Clone)]
 pub struct EntityRefs {
-    pub players: [Entity; 4],
-    pub player_spawns: [(f32, f32); 4],
+    pub players: [Entity; CtfSlot::COUNT],
+    pub player_spawns: [(f32, f32); CtfSlot::COUNT],
     pub red_flag: Entity,
     pub blue_flag: Entity,
     pub red_flag_spawn: (f32, f32),
@@ -79,7 +79,7 @@ pub struct AutoMovePath {
 /// Active auto-move paths indexed by `CtfSlot::index`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AutoMoveState {
-    pub paths: [Option<AutoMovePath>; 4],
+    pub paths: [Option<AutoMovePath>; CtfSlot::COUNT],
 }
 
 impl Default for AutoMoveState {
@@ -97,6 +97,22 @@ pub struct CtfPointerState {
     pub pending_left_click_world: Option<(f32, f32)>,
 }
 
+/// Selected map size and pending level reload for the post-win restart panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CtfRestartState {
+    pub selected_map_size: MapSize,
+    pub pending_reload: Option<MapSize>,
+}
+
+impl Default for CtfRestartState {
+    fn default() -> Self {
+        Self {
+            selected_map_size: MapSize::Small,
+            pending_reload: None,
+        }
+    }
+}
+
 /// Grid used by point-and-click movement.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NavigationGrid {
@@ -104,6 +120,8 @@ pub struct NavigationGrid {
     pub cols: usize,
     pub rows: usize,
     pub walkable: Vec<bool>,
+    pub arena_width: f32,
+    pub arena_height: f32,
 }
 
 impl NavigationGrid {

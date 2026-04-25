@@ -39,6 +39,10 @@ bytemuck = { version = "1.14", features = ["derive"] }
 pollster = "0.3"
 
 [[bin]]
+name = "gen_ctf_arenas"
+path = "src/bin/gen_ctf_arenas.rs"
+
+[[bin]]
 name = "matchmaker"
 path = "src/bin/matchmaker.rs"
 

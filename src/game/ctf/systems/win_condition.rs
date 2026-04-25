@@ -6,7 +6,7 @@ use crate::ecs::system::System;
 use crate::ecs::world::World;
 use crate::game::ctf::components::PlayerMarker;
 use crate::game::ctf::resources::{CarrierState, CtfSyncState, EntityRefs, GamePhase, GameState};
-use crate::game::ctf::MIDLINE_X;
+use crate::multiplayer::matchmaking::MapSize;
 
 use super::is_playing;
 
@@ -24,20 +24,24 @@ impl System for WinConditionSystem {
             return;
         };
         let carrier = world.resource::<CarrierState>().copied().unwrap_or_default();
+        let midline_x = world
+            .resource::<MapSize>()
+            .map(|ms| ms.midline_x())
+            .unwrap_or(crate::game::ctf::MIDLINE_X);
 
         let winner = carrier
             .blue_flag_carrier
             .and_then(|slot| {
                 world
                     .get::<Transform>(refs.player(slot))
-                    .filter(|tf| tf.position.x < MIDLINE_X)
+                    .filter(|tf| tf.position.x < midline_x)
                     .map(|_| 1)
             })
             .or_else(|| {
                 carrier.red_flag_carrier.and_then(|slot| {
                     world
                         .get::<Transform>(refs.player(slot))
-                        .filter(|tf| tf.position.x > MIDLINE_X)
+                        .filter(|tf| tf.position.x > midline_x)
                         .map(|_| 2)
                 })
             });

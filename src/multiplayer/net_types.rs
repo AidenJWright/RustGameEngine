@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::components::Transform;
-use crate::multiplayer::matchmaking::{CtfSlot, CtfSlotAssignment, GameMode};
+use crate::multiplayer::matchmaking::{CtfSlot, CtfSlotAssignment, GameMode, MapSize};
 
 /// A transport-agnostic network tick index.
 pub type NetworkTick = u32;
@@ -41,6 +41,9 @@ pub struct InputFrame {
     /// Optional CTF-only pointer input used for aiming and click movement.
     #[serde(default)]
     pub ctf_pointer: Option<CtfPointerInput>,
+    /// Optional CTF-only restart settings captured when restart is requested.
+    #[serde(default)]
+    pub ctf_restart: Option<CtfRestartInput>,
 }
 
 /// CTF pointer command data attached to an input frame.
@@ -50,6 +53,12 @@ pub struct CtfPointerInput {
     pub aim_world: Option<(f32, f32)>,
     /// One-shot click destination for point-and-click movement.
     pub click_world: Option<(f32, f32)>,
+}
+
+/// CTF restart command data attached to a restart input frame.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct CtfRestartInput {
+    pub map_size: MapSize,
 }
 
 /// Canonical per-entity snapshot row used for host corrections.
@@ -208,6 +217,8 @@ pub struct MatchState {
     pub start_tick: NetworkTick,
     /// Selected game mode for this match.
     pub game_mode: GameMode,
+    /// CTF arena size for this match.
+    pub map_size: MapSize,
     /// Host-selected CTF slot assignments. Empty for non-CTF matches.
     pub ctf_assignments: Vec<CtfSlotAssignment>,
 }

@@ -4,13 +4,17 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, VecDeque};
 
 use crate::game::ctf::resources::NavigationGrid;
-use crate::game::ctf::{ARENA_HEIGHT, ARENA_WIDTH, PATH_GRID_CELL_SIZE, PLAYER_RADIUS};
+use crate::game::ctf::{PATH_GRID_CELL_SIZE, PLAYER_RADIUS};
 
-/// Build a navigation grid from wall AABBs.
-pub fn build_navigation_grid(walls: &[(f32, f32, f32, f32)]) -> NavigationGrid {
+/// Build a navigation grid from wall AABBs covering the given arena bounds.
+pub fn build_navigation_grid(
+    walls: &[(f32, f32, f32, f32)],
+    arena_width: f32,
+    arena_height: f32,
+) -> NavigationGrid {
     let cell_size = PATH_GRID_CELL_SIZE;
-    let cols = (ARENA_WIDTH / cell_size).ceil() as usize;
-    let rows = (ARENA_HEIGHT / cell_size).ceil() as usize;
+    let cols = (arena_width / cell_size).ceil() as usize;
+    let rows = (arena_height / cell_size).ceil() as usize;
     let mut walkable = vec![true; cols * rows];
 
     for row in 0..rows {
@@ -31,6 +35,8 @@ pub fn build_navigation_grid(walls: &[(f32, f32, f32, f32)]) -> NavigationGrid {
         cols,
         rows,
         walkable,
+        arena_width,
+        arena_height,
     }
 }
 
@@ -54,7 +60,7 @@ pub fn find_path(
         .collect::<Vec<_>>();
 
     if let Some(last) = waypoints.last_mut() {
-        let target = clamp_world(goal);
+        let target = clamp_world(grid, goal);
         if line_of_sight(grid, *last, target) {
             *last = target;
         }
@@ -259,7 +265,7 @@ fn heuristic(a: (usize, usize), b: (usize, usize)) -> u32 {
 }
 
 fn world_to_cell(grid: &NavigationGrid, world: (f32, f32)) -> (usize, usize) {
-    let world = clamp_world(world);
+    let world = clamp_world(grid, world);
     let col = (world.0 / grid.cell_size).floor() as usize;
     let row = (world.1 / grid.cell_size).floor() as usize;
     (col.min(grid.cols - 1), row.min(grid.rows - 1))
@@ -276,10 +282,10 @@ fn cell_center(cell_size: f32, col: usize, row: usize) -> (f32, f32) {
     )
 }
 
-fn clamp_world(world: (f32, f32)) -> (f32, f32) {
+fn clamp_world(grid: &NavigationGrid, world: (f32, f32)) -> (f32, f32) {
     (
-        world.0.clamp(0.0, ARENA_WIDTH),
-        world.1.clamp(0.0, ARENA_HEIGHT),
+        world.0.clamp(0.0, grid.arena_width),
+        world.1.clamp(0.0, grid.arena_height),
     )
 }
 
@@ -318,7 +324,7 @@ mod tests {
 
     #[test]
     fn path_avoids_expanded_wall() {
-        let grid = build_navigation_grid(&[(100.0, 100.0, 10.0, 60.0)]);
+        let grid = build_navigation_grid(&[(100.0, 100.0, 10.0, 60.0)], 1280.0, 720.0);
         let path = find_path(&grid, (40.0, 100.0), (180.0, 100.0)).expect("path");
         assert!(path.len() > 1);
         assert!(path.iter().all(|point| line_of_sight(&grid, *point, *point)));
@@ -326,7 +332,7 @@ mod tests {
 
     #[test]
     fn blocked_target_resolves_to_walkable_cell() {
-        let grid = build_navigation_grid(&[(100.0, 100.0, 20.0, 20.0)]);
+        let grid = build_navigation_grid(&[(100.0, 100.0, 20.0, 20.0)], 1280.0, 720.0);
         let path = find_path(&grid, (40.0, 100.0), (100.0, 100.0)).expect("path");
         let last = *path.last().expect("last waypoint");
         assert!(line_of_sight(&grid, last, last));

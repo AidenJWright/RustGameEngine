@@ -36,7 +36,6 @@ enum Command {
     /// Create a lobby and become first member.
     Create {
         player_name: String,
-        game_addr: String,
         #[arg(long, default_value_t = 4)]
         target_players: u8,
     },
@@ -45,16 +44,10 @@ enum Command {
     Join {
         lobby_code: String,
         player_name: String,
-        game_addr: String,
     },
 
     /// Send a heartbeat so this client does not time out.
-    Heartbeat {
-        lobby_code: String,
-        client_id: u64,
-        /// Optional game endpoint to refresh.
-        game_addr: Option<String>,
-    },
+    Heartbeat { lobby_code: String, client_id: u64 },
 
     /// Request that a lobby starts now (optional; auto-start triggers at threshold).
     Start { lobby_code: String, client_id: u64 },
@@ -76,12 +69,10 @@ fn main() {
         Command::Ping => (MatchRequest::Ping, true),
         Command::Create {
             player_name,
-            game_addr,
             target_players,
         } => (
             MatchRequest::CreateLobby {
                 player_name,
-                game_addr,
                 target_players,
                 game_mode: GameMode::DefaultScene,
                 map_size: MapSize::Small,
@@ -91,24 +82,20 @@ fn main() {
         Command::Join {
             lobby_code,
             player_name,
-            game_addr,
         } => (
             MatchRequest::JoinLobby {
                 lobby_code,
                 player_name,
-                game_addr,
             },
             true,
         ),
         Command::Heartbeat {
             lobby_code,
             client_id,
-            game_addr,
         } => (
             MatchRequest::Heartbeat {
                 lobby_code,
                 client_id,
-                game_addr,
             },
             false,
         ),
@@ -232,17 +219,15 @@ fn print_event(event: &MatchEvent) {
             );
             println!("players={}", lobby.players.len());
             for player in &lobby.players {
-                println!(
-                    "player {}|{}|{}",
-                    player.client_id, player.name, player.game_addr
-                );
+                println!("player {}|{}", player.client_id, player.name);
             }
         }
         MatchEvent::MatchStart {
             lobby_code,
             host_client_id,
             seed,
-            player_endpoints,
+            players,
+            relay,
             game_mode,
             ctf_assignments,
             ..
@@ -252,13 +237,13 @@ fn print_event(event: &MatchEvent) {
             println!("host_client_id={host_client_id}");
             println!("seed={seed}");
             println!("game_mode={game_mode:?}");
-            println!("players={}", player_endpoints.len());
+            println!("players={}", players.len());
+            println!("relay_match_id={}", relay.match_id);
+            println!("relay_udp_endpoint={}", relay.udp_endpoint);
+            println!("relay_client_id={}", relay.client_id);
             println!("ctf_assignments={}", ctf_assignments.len());
-            for player in player_endpoints {
-                println!(
-                    "endpoint {}|{}|{}",
-                    player.client_id, player.name, player.game_addr
-                );
+            for player in players {
+                println!("player {}|{}", player.client_id, player.name);
             }
         }
         MatchEvent::Error { message } => {

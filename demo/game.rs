@@ -3,15 +3,14 @@
 //! Run commands:
 //!   `cargo run --bin game`                      (new UI launcher flow)
 //!   `cargo run --bin game -- single`            (single player)
-//!   `cargo run --bin game -- host Alice`        (legacy, auto game addr)
-//!   `cargo run --bin game -- join 1234 Bob`     (legacy, auto game addr)
-//!   `cargo run --bin game -- --game-port 7010`  (override gameplay UDP port)
+//!   `cargo run --bin game -- host Alice`        (legacy no-launcher flow)
+//!   `cargo run --bin game -- join 1234 Bob`     (legacy no-launcher flow)
 
 #![warn(clippy::all, clippy::pedantic)]
 #![allow(clippy::too_many_lines)]
 
 use std::io;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
+use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand};
@@ -22,8 +21,9 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowAttributes, WindowId};
 
 use forge_ecs::app::AppCore;
-use forge_ecs::components::{Camera, Color, PlayerInput, Shape, SpawnPoints, Tag, Transform, Velocity};
-use forge_ecs::scene::reload_scene;
+use forge_ecs::components::{
+    Camera, Color, PlayerInput, Shape, SpawnPoints, Tag, Transform, Velocity,
+};
 use forge_ecs::ecs::entity::Entity;
 use forge_ecs::ecs::resource::{DeltaTime, ElapsedTime, KeysPressed};
 use forge_ecs::ecs::world::World;
@@ -36,9 +36,7 @@ use forge_ecs::game::ctf::systems::{
     AutoMoveSystem, CtfInputSystem, FlagCarrySystem, FlagMotionSystem, FlagPickupSystem,
     StopOnWinSystem, WallCollisionSystem, WinConditionSystem,
 };
-use forge_ecs::game::ctf::{
-    ACTION_RESTART, ACTION_SWITCH, ACTION_TAG, RESTART_KEY, SWITCH_KEY,
-};
+use forge_ecs::game::ctf::{ACTION_RESTART, ACTION_SWITCH, ACTION_TAG, RESTART_KEY, SWITCH_KEY};
 use forge_ecs::math::Vec3;
 use forge_ecs::messaging::{LoopPhase, MessageBus};
 use forge_ecs::multiplayer;
@@ -53,9 +51,8 @@ use forge_ecs::platform::{
     map_window_event, KeyCode, MouseButton as EngineMouseButton, PlatformEvent,
 };
 use forge_ecs::renderer::draw::DrawCommand;
+use forge_ecs::scene::reload_scene;
 use forge_ecs::systems::{MovementSystem, PlayerInputSystem, SinusoidSystem};
-
-const DEFAULT_GAMEPLAY_PORT: u16 = 7001;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -69,10 +66,6 @@ struct Cli {
     /// remote matchmaker without passing a CLI flag every run.
     #[arg(long, default_value = "127.0.0.1:7000", env = "MATCHMAKER_ADDR")]
     matchmaker: String,
-    /// Local UDP gameplay port advertised to peers (launcher + legacy auto-addr).
-    #[arg(long, default_value_t = DEFAULT_GAMEPLAY_PORT)]
-    game_port: u16,
-
     #[command(subcommand)]
     mode: Option<Mode>,
 }
@@ -85,10 +78,6 @@ enum Mode {
     Host {
         /// Display name in match events.
         player_name: String,
-        /// Optional advertised gameplay endpoint, e.g. 192.168.1.10:7001.
-        ///
-        /// If omitted, this is auto-derived from `--game-port`.
-        game_addr: Option<String>,
     },
     /// Legacy mode: join a lobby and wait for start without launcher UI.
     Join {
@@ -96,10 +85,6 @@ enum Mode {
         lobby_code: String,
         /// Display name in match events.
         player_name: String,
-        /// Optional advertised gameplay endpoint, e.g. 192.168.1.11:7001.
-        ///
-        /// If omitted, this is auto-derived from `--game-port`.
-        game_addr: Option<String>,
     },
 }
 
@@ -310,9 +295,6 @@ struct LauncherRuntime {
     error_message: String,
     connected_matchmaker: Option<SocketAddr>,
     control_socket: Option<UdpSocket>,
-    prebound_game_socket: Option<UdpSocket>,
-    local_game_addr: Option<SocketAddr>,
-    gameplay_port: u16,
     local_player_id: Option<u64>,
     lobby_code: Option<String>,
     lobby_state: Option<LobbyState>,
@@ -325,7 +307,7 @@ struct LauncherRuntime {
 }
 
 impl LauncherRuntime {
-    fn new(default_matchmaker: String, gameplay_port: u16) -> Self {
+    fn new(default_matchmaker: String) -> Self {
         Self {
             screen: LauncherScreen::Connect,
             username_input: "Player".to_string(),
@@ -338,9 +320,6 @@ impl LauncherRuntime {
             error_message: String::new(),
             connected_matchmaker: None,
             control_socket: None,
-            prebound_game_socket: None,
-            local_game_addr: None,
-            gameplay_port,
             local_player_id: None,
             lobby_code: None,
             lobby_state: None,
@@ -420,31 +399,24 @@ impl LauncherRuntime {
             return;
         }
 
-        let Some(server_addr) = self.connected_matchmaker else {
+        if self.connected_matchmaker.is_none() {
             self.error_message = "Not connected to a matchmaker.".to_string();
             self.screen = LauncherScreen::Connect;
             return;
-        };
+        }
 
-        let min_players = if self.game_mode == GameMode::CaptureTheFlag { 2 } else { 1 };
+        let min_players = if self.game_mode == GameMode::CaptureTheFlag {
+            2
+        } else {
+            1
+        };
         if !(min_players..=4).contains(&self.target_players) {
-            self.error_message =
-                format!("Target players must be between {min_players} and 4.");
+            self.error_message = format!("Target players must be between {min_players} and 4.");
             return;
         }
 
-        let (game_socket, local_addr) =
-            match prebind_gameplay_socket(server_addr, self.gameplay_port) {
-                Ok(values) => values,
-                Err(error) => {
-                    self.error_message = format!("Could not bind gameplay socket: {error}");
-                    return;
-                }
-            };
-
         let request = MatchRequest::CreateLobby {
             player_name: self.username_input.trim().to_string(),
-            game_addr: local_addr.to_string(),
             target_players: self.target_players,
             game_mode: self.game_mode,
             map_size: self.map_size,
@@ -455,8 +427,6 @@ impl LauncherRuntime {
             return;
         }
 
-        self.prebound_game_socket = Some(game_socket);
-        self.local_game_addr = Some(local_addr);
         self.pending_request = Some(PendingRequest::CreateLobby {
             sent_at: Instant::now(),
         });
@@ -470,11 +440,11 @@ impl LauncherRuntime {
             return;
         }
 
-        let Some(server_addr) = self.connected_matchmaker else {
+        if self.connected_matchmaker.is_none() {
             self.error_message = "Not connected to a matchmaker.".to_string();
             self.screen = LauncherScreen::Connect;
             return;
-        };
+        }
 
         let sanitized_code = self
             .join_code_input
@@ -486,19 +456,9 @@ impl LauncherRuntime {
             return;
         }
 
-        let (game_socket, local_addr) =
-            match prebind_gameplay_socket(server_addr, self.gameplay_port) {
-                Ok(values) => values,
-                Err(error) => {
-                    self.error_message = format!("Could not bind gameplay socket: {error}");
-                    return;
-                }
-            };
-
         let request = MatchRequest::JoinLobby {
             lobby_code: sanitized_code.clone(),
             player_name: self.username_input.trim().to_string(),
-            game_addr: local_addr.to_string(),
         };
 
         if let Err(error) = self.send_request(request) {
@@ -507,8 +467,6 @@ impl LauncherRuntime {
         }
 
         self.join_code_input = sanitized_code;
-        self.prebound_game_socket = Some(game_socket);
-        self.local_game_addr = Some(local_addr);
         self.pending_request = Some(PendingRequest::JoinLobby {
             sent_at: Instant::now(),
         });
@@ -683,7 +641,8 @@ impl LauncherRuntime {
                 lobby_code,
                 host_client_id,
                 seed,
-                player_endpoints,
+                players,
+                relay,
                 game_mode,
                 map_size,
                 ctf_assignments,
@@ -697,17 +656,12 @@ impl LauncherRuntime {
                     return None;
                 }
 
-                let Some(game_socket) = self.prebound_game_socket.take() else {
-                    self.error_message =
-                        "MatchStart received but gameplay socket is unavailable.".to_string();
-                    return None;
-                };
-
                 let state = MatchState {
                     lobby_code,
                     host_peer_id: host_client_id,
                     shared_seed: seed,
-                    players: player_endpoints,
+                    players,
+                    relay,
                     start_tick: 0,
                     game_mode,
                     map_size,
@@ -717,11 +671,10 @@ impl LauncherRuntime {
                 // Cache the lobby code so the reconnect button can use it.
                 self.last_lobby_code = Some(state.lobby_code.clone());
 
-                match MatchSession::new_with_socket(
+                match MatchSession::new(
                     multiplayer::net_types::NetworkPolicy::default(),
                     state,
                     local_player_id,
-                    game_socket,
                 ) {
                     Ok(session) => return Some(session),
                     Err(error) => {
@@ -770,7 +723,6 @@ impl LauncherRuntime {
         let request = MatchRequest::Heartbeat {
             lobby_code,
             client_id,
-            game_addr: self.local_game_addr.map(|addr| addr.to_string()),
         };
 
         if let Err(error) = self.send_request(request) {
@@ -824,10 +776,7 @@ struct DemoState {
 }
 
 enum StartupMode {
-    Launcher {
-        matchmaker_addr: String,
-        gameplay_port: u16,
-    },
+    Launcher { matchmaker_addr: String },
     Single,
     LegacySession(MatchSession),
 }
@@ -882,16 +831,13 @@ impl ApplicationHandler for GameApp {
         };
 
         match startup {
-            StartupMode::Launcher {
-                matchmaker_addr,
-                gameplay_port,
-            } => {
+            StartupMode::Launcher { matchmaker_addr } => {
                 let _ = state
                     .core
                     .platform
                     .window
                     .set_title("Forge ECS -- Multiplayer Launcher");
-                state.launcher = Some(LauncherRuntime::new(matchmaker_addr, gameplay_port));
+                state.launcher = Some(LauncherRuntime::new(matchmaker_addr));
             }
             StartupMode::Single => {
                 initialize_single_player_scene(&mut state);
@@ -1104,44 +1050,6 @@ fn bind_control_socket(server_addr: SocketAddr) -> io::Result<UdpSocket> {
     }
 }
 
-fn resolve_local_interface_ip(matchmaker_addr: SocketAddr) -> io::Result<IpAddr> {
-    let probe = if matchmaker_addr.is_ipv4() {
-        UdpSocket::bind("0.0.0.0:0")?
-    } else {
-        UdpSocket::bind("[::]:0")?
-    };
-
-    let _ = probe.connect(matchmaker_addr);
-    let mut local_ip = probe.local_addr()?.ip();
-    if local_ip.is_unspecified() {
-        local_ip = if matchmaker_addr.is_ipv4() {
-            IpAddr::V4(Ipv4Addr::LOCALHOST)
-        } else {
-            IpAddr::V6(Ipv6Addr::LOCALHOST)
-        };
-    }
-
-    Ok(local_ip)
-}
-
-fn prebind_gameplay_socket(
-    matchmaker_addr: SocketAddr,
-    gameplay_port: u16,
-) -> io::Result<(UdpSocket, SocketAddr)> {
-    let local_ip = resolve_local_interface_ip(matchmaker_addr)?;
-    // Use port 0 to let the OS assign an available port, preventing collisions
-    // when multiple clients run on the same machine.  If an explicit port was
-    // provided (non-default) we still honour it.
-    let bind_port = if gameplay_port == DEFAULT_GAMEPLAY_PORT {
-        0
-    } else {
-        gameplay_port
-    };
-    let gameplay_socket = UdpSocket::bind(SocketAddr::new(local_ip, bind_port))?;
-    let local_addr = gameplay_socket.local_addr()?;
-    Ok((gameplay_socket, local_addr))
-}
-
 fn local_follow_position(state: &DemoState) -> Option<Vec3> {
     if state.game_mode == GameMode::CaptureTheFlag {
         let selected_slot = state
@@ -1152,7 +1060,10 @@ fn local_follow_position(state: &DemoState) -> Option<Vec3> {
             .iter()
             .find(|control| control.client_id == state.local_player_id)?
             .selected_slot;
-        let refs = state.core.world.resource::<forge_ecs::game::ctf::resources::EntityRefs>()?;
+        let refs = state
+            .core
+            .world
+            .resource::<forge_ecs::game::ctf::resources::EntityRefs>()?;
         return state
             .core
             .world
@@ -1253,7 +1164,10 @@ fn process_ctf_level_reload(state: &mut DemoState) {
     state.camera_pan = Vec3::ZERO;
     state.camera_middle_dragging = false;
     state.camera_last_cursor = None;
-    state.core.world.insert_resource(CtfSyncState { dirty: true });
+    state
+        .core
+        .world
+        .insert_resource(CtfSyncState { dirty: true });
 }
 
 fn update_ctf_cursor_world(state: &mut DemoState, x: f64, y: f64) {
@@ -1305,19 +1219,6 @@ fn screen_to_ctf_world(state: &DemoState, x: f64, y: f64) -> (f32, f32) {
     )
 }
 
-fn resolve_or_default_game_addr(
-    provided_game_addr: Option<String>,
-    matchmaker_addr: SocketAddr,
-    gameplay_port: u16,
-) -> io::Result<String> {
-    if let Some(addr) = provided_game_addr {
-        return Ok(addr);
-    }
-
-    let local_ip = resolve_local_interface_ip(matchmaker_addr)?;
-    Ok(SocketAddr::new(local_ip, gameplay_port).to_string())
-}
-
 fn initialize_single_player_scene(state: &mut DemoState) {
     // Load scene.json; fall back to a generated default if missing.
     if let Err(e) = reload_scene(&mut state.core.world, "scene.json") {
@@ -1327,9 +1228,11 @@ fn initialize_single_player_scene(state: &mut DemoState) {
 
     // Insert KeysPressed resource so PlayerInputSystem can function.
     state.core.world.insert_resource(KeysPressed::default());
-    state
-        .bus
-        .register(LoopPhase::Update, PlayerInputSystem::PRIORITY, PlayerInputSystem);
+    state.bus.register(
+        LoopPhase::Update,
+        PlayerInputSystem::PRIORITY,
+        PlayerInputSystem,
+    );
 
     // Find the player entity by Tag "player"; fall back to any entity with Velocity.
     let player_entity = state
@@ -1508,20 +1411,19 @@ fn initialize_multiplayer_ctf_scene(state: &mut DemoState, session: MatchSession
     state.bus.register(LoopPhase::Update, -20, CtfInputSystem);
     state.bus.register(LoopPhase::Update, -15, AutoMoveSystem);
     state.bus.register(LoopPhase::Update, -9, StopOnWinSystem);
-    state.bus.register(LoopPhase::Update, 12, WallCollisionSystem);
+    state
+        .bus
+        .register(LoopPhase::Update, 12, WallCollisionSystem);
     state.bus.register(LoopPhase::Update, 14, FlagMotionSystem);
     state.bus.register(LoopPhase::Update, 15, FlagPickupSystem);
     state.bus.register(LoopPhase::Update, 20, FlagCarrySystem);
-    state.bus.register(LoopPhase::Update, 25, WinConditionSystem);
+    state
+        .bus
+        .register(LoopPhase::Update, 25, WinConditionSystem);
 
     let player_entities: Vec<(u64, Entity)> = assignments
         .iter()
-        .map(|assignment| {
-            (
-                assignment.client_id,
-                refs.player(assignment.primary_slot),
-            )
-        })
+        .map(|assignment| (assignment.client_id, refs.player(assignment.primary_slot)))
         .collect();
 
     state.player_slots = player_entities
@@ -1573,7 +1475,6 @@ fn find_or_create_camera(world: &mut World) -> Option<Entity> {
     world.insert(cam_entity, Camera::new());
     Some(cam_entity)
 }
-
 
 fn draw_launcher_ui(ui: &imgui::Ui, launcher: &mut LauncherRuntime) {
     ui.window("Multiplayer Launcher")
@@ -1850,7 +1751,6 @@ fn normalized_ctf_assignments(lobby: &LobbyState) -> Vec<CtfSlotAssignment> {
     assignments
 }
 
-
 /// Spawn a minimal fallback player entity when `scene.json` is missing.
 fn setup_single_player_scene(world: &mut World) {
     let scene_root = world.spawn();
@@ -1863,12 +1763,16 @@ fn setup_single_player_scene(world: &mut World) {
     world.insert(circle_entity, Shape::Circle { radius: 50.0 });
     world.insert(
         circle_entity,
-        Color { r: color.r, g: color.g, b: color.b, a: color.a },
+        Color {
+            r: color.r,
+            g: color.g,
+            b: color.b,
+            a: color.a,
+        },
     );
     world.insert(circle_entity, Velocity { dx: 0.0, dy: 0.0 });
     world.insert(circle_entity, PlayerInput::default());
 }
-
 
 fn apply_player_velocity(
     world: &mut World,
@@ -1965,7 +1869,12 @@ fn apply_multiplayer_tick(
                     if game_mode == GameMode::CaptureTheFlag {
                         ctf_frames.push(input);
                     } else {
-                        let InputFrame { player_id, move_x, move_y, .. } = input;
+                        let InputFrame {
+                            player_id,
+                            move_x,
+                            move_y,
+                            ..
+                        } = input;
                         apply_player_velocity(world, player_entities, player_id, move_x, move_y);
                     }
                 }
@@ -2129,13 +2038,24 @@ fn apply_camera_to_cmd(
     let center_x = viewport_w * 0.5;
     let center_y = viewport_h * 0.5;
     match cmd {
-        DrawCommand::Circle { x, y, radius, color } => DrawCommand::Circle {
+        DrawCommand::Circle {
+            x,
+            y,
+            radius,
+            color,
+        } => DrawCommand::Circle {
             x: (x - cam_x) * zoom + center_x,
             y: (y - cam_y) * zoom + center_y,
             radius: radius * zoom,
             color,
         },
-        DrawCommand::Rect { x, y, width, height, color } => DrawCommand::Rect {
+        DrawCommand::Rect {
+            x,
+            y,
+            width,
+            height,
+            color,
+        } => DrawCommand::Rect {
             x: (x - cam_x) * zoom + center_x,
             y: (y - cam_y) * zoom + center_y,
             width: width * zoom,
@@ -2158,11 +2078,7 @@ fn apply_camera_to_cmd(
     }
 }
 
-fn bootstrap_session(
-    mode: &Mode,
-    matchmaker_addr: &str,
-    gameplay_port: u16,
-) -> io::Result<Option<MatchSession>> {
+fn bootstrap_session(mode: &Mode, matchmaker_addr: &str) -> io::Result<Option<MatchSession>> {
     let addr = matchmaker_addr.parse::<SocketAddr>().map_err(|error| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -2172,11 +2088,7 @@ fn bootstrap_session(
 
     match mode {
         Mode::Single => Ok(None),
-        Mode::Host {
-            player_name,
-            game_addr,
-        } => {
-            let game_addr = resolve_or_default_game_addr(game_addr.clone(), addr, gameplay_port)?;
+        Mode::Host { player_name } => {
             let socket = UdpSocket::bind("0.0.0.0:0").expect("could not bind UDP socket");
             socket
                 .set_read_timeout(Some(Duration::from_millis(350)))
@@ -2187,7 +2099,6 @@ fn bootstrap_session(
                 &addr,
                 MatchRequest::CreateLobby {
                     player_name: player_name.clone(),
-                    game_addr: game_addr.clone(),
                     target_players: 4,
                     game_mode: GameMode::DefaultScene,
                     map_size: MapSize::Small,
@@ -2208,17 +2119,8 @@ fn bootstrap_session(
                 }
             };
 
-            println!(
-                "host lobby created: code={lobby_code}, player={local_player_id}, game_addr={game_addr}"
-            );
-            let state = await_match_start(
-                &socket,
-                &addr,
-                &lobby_code,
-                local_player_id,
-                true,
-                Some(game_addr),
-            )?;
+            println!("host lobby created: code={lobby_code}, player={local_player_id}");
+            let state = await_match_start(&socket, &addr, &lobby_code, local_player_id, true)?;
             Ok(Some(MatchSession::new(
                 multiplayer::net_types::NetworkPolicy::default(),
                 state,
@@ -2228,9 +2130,7 @@ fn bootstrap_session(
         Mode::Join {
             lobby_code,
             player_name,
-            game_addr,
         } => {
-            let game_addr = resolve_or_default_game_addr(game_addr.clone(), addr, gameplay_port)?;
             let socket = UdpSocket::bind("0.0.0.0:0").expect("could not bind UDP socket");
             socket
                 .set_read_timeout(Some(Duration::from_millis(350)))
@@ -2242,7 +2142,6 @@ fn bootstrap_session(
                 MatchRequest::JoinLobby {
                     lobby_code: lobby_code.clone(),
                     player_name: player_name.clone(),
-                    game_addr: game_addr.clone(),
                 },
             )?;
 
@@ -2260,17 +2159,8 @@ fn bootstrap_session(
                 }
             };
 
-            println!(
-                "joined lobby: code={lobby_code}, player={local_player_id}, game_addr={game_addr}"
-            );
-            let state = await_match_start(
-                &socket,
-                &addr,
-                lobby_code,
-                local_player_id,
-                false,
-                Some(game_addr),
-            )?;
+            println!("joined lobby: code={lobby_code}, player={local_player_id}");
+            let state = await_match_start(&socket, &addr, lobby_code, local_player_id, false)?;
             Ok(Some(MatchSession::new(
                 multiplayer::net_types::NetworkPolicy::default(),
                 state,
@@ -2286,7 +2176,6 @@ fn await_match_start(
     lobby_code: &str,
     local_player_id: u64,
     is_host: bool,
-    game_addr: Option<String>,
 ) -> io::Result<MatchState> {
     let deadline = Instant::now() + Duration::from_secs(180);
     let mut last_start_send = Instant::now();
@@ -2316,7 +2205,6 @@ fn await_match_start(
             let request = MatchRequest::Heartbeat {
                 lobby_code: lobby_code.to_string(),
                 client_id: local_player_id,
-                game_addr: game_addr.clone(),
             };
             let _ = send_no_reply(socket, matchmaker_addr, request);
             last_heartbeat = Instant::now();
@@ -2327,7 +2215,8 @@ fn await_match_start(
                 lobby_code: started_code,
                 host_client_id,
                 seed,
-                player_endpoints,
+                players,
+                relay,
                 game_mode,
                 map_size,
                 ctf_assignments,
@@ -2337,7 +2226,8 @@ fn await_match_start(
                         lobby_code: started_code,
                         host_peer_id: host_client_id,
                         shared_seed: seed,
-                        players: player_endpoints,
+                        players,
+                        relay,
                         start_tick: 0,
                         game_mode,
                         map_size,
@@ -2402,10 +2292,9 @@ fn main() {
     let startup = match cli.mode.clone() {
         None => StartupMode::Launcher {
             matchmaker_addr: cli.matchmaker.clone(),
-            gameplay_port: cli.game_port,
         },
         Some(Mode::Single) => StartupMode::Single,
-        Some(mode) => match bootstrap_session(&mode, &cli.matchmaker, cli.game_port) {
+        Some(mode) => match bootstrap_session(&mode, &cli.matchmaker) {
             Ok(Some(session)) => StartupMode::LegacySession(session),
             Ok(None) => StartupMode::Single,
             Err(error) => {

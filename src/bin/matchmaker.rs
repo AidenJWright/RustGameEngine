@@ -5,7 +5,8 @@
 
 use std::collections::HashMap;
 use std::io;
-use std::net::{SocketAddr, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use clap::Parser;
@@ -13,12 +14,17 @@ use rand::Rng;
 
 use forge_ecs::multiplayer::matchmaking::{
     deserialize_request, send_match_event, CtfSlot, CtfSlotAssignment, GameMode, LobbyState,
-    MapSize, MatchEvent, MatchRequest, PlayerInfo, MAX_PLAYERS,
+    MapSize, MatchEvent, MatchRequest, PlayerInfo, RelayConnectInfo, MAX_PLAYERS,
+};
+use forge_ecs::multiplayer::net_types::{
+    deserialize_relay_packet, serialize_relay_packet, NetMessage, RelayClientPacket,
+    RelayServerPacket, RELAY_PROTOCOL_VERSION,
 };
 
-const MATCHMAKER_TICK_MS: u64 = 125;
 const STALE_CLIENT_SECS: u64 = 45;
+const STALE_RELAY_CLIENT_SECS: u64 = 60;
 const AUTO_START_AFTER_TARGET_SECS: u64 = 5;
+const DEFAULT_RELAY_HEARTBEAT_SECS: u64 = 5;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -33,6 +39,20 @@ struct Args {
     /// Override with the `MATCHMAKER_BIND` environment variable instead of a flag if preferred.
     #[arg(long, default_value = "127.0.0.1:7000", env = "MATCHMAKER_BIND")]
     bind: String,
+
+    /// Address that the gameplay relay binds to.
+    ///
+    /// For deployment use `0.0.0.0:7001`. A privileged process can also bind a
+    /// well-known UDP port such as `0.0.0.0:443` on a dedicated relay VM.
+    #[arg(long, default_value = "127.0.0.1:7001", env = "RELAY_BIND")]
+    relay_bind: String,
+
+    /// Public relay endpoint sent to matched clients.
+    ///
+    /// If omitted, the relay bind address is advertised unless it uses an
+    /// unspecified IP, in which case `127.0.0.1:<relay-port>` is used.
+    #[arg(long, env = "RELAY_ADVERTISE")]
+    relay_advertise: Option<String>,
 }
 
 #[derive(Debug)]
@@ -66,34 +86,85 @@ struct Lobby {
     last_countdown_sent: Option<u64>,
 }
 
+#[derive(Debug)]
+struct RelayPlayer {
+    token: String,
+    remote_addr: Option<SocketAddr>,
+    last_seen: Instant,
+}
+
+#[derive(Debug)]
+struct RelayMatch {
+    players: HashMap<u64, RelayPlayer>,
+    last_activity: Instant,
+}
+
 fn main() {
     let args = Args::parse();
     let bind_addr: SocketAddr = args
         .bind
         .parse()
         .expect("matchmaker --bind must be a valid socket address");
+    let relay_bind_addr: SocketAddr = args
+        .relay_bind
+        .parse()
+        .expect("matchmaker --relay-bind must be a valid socket address");
+    let relay_advertise = args
+        .relay_advertise
+        .unwrap_or_else(|| advertise_addr_for(relay_bind_addr));
 
     let socket = UdpSocket::bind(bind_addr).expect("failed to bind matchmaker socket");
+    let relay_socket = UdpSocket::bind(relay_bind_addr).expect("failed to bind relay socket");
     socket
-        .set_read_timeout(Some(Duration::from_millis(MATCHMAKER_TICK_MS)))
-        .expect("failed to set matchmaker read timeout");
+        .set_nonblocking(true)
+        .expect("failed to set matchmaker nonblocking mode");
+    relay_socket
+        .set_nonblocking(true)
+        .expect("failed to set relay nonblocking mode");
 
     println!("Matchmaker listening on {bind_addr}");
+    println!("Gameplay relay listening on {relay_bind_addr}, advertising {relay_advertise}");
 
     let mut lobbies: HashMap<String, Lobby> = HashMap::new();
+    let mut relay_matches: HashMap<String, RelayMatch> = HashMap::new();
     let mut next_client_id: u64 = 1;
     let mut last_cleanup = Instant::now();
     let mut buffer = [0_u8; 65_536];
+    let mut relay_buffer = [0_u8; 65_536];
 
     loop {
-        if let Err(error) = process_tick(&socket, &mut buffer, &mut lobbies, &mut next_client_id) {
-            match error.kind() {
-                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => {}
-                _ => eprintln!("matchmaker packet error: {error}"),
+        let mut did_work = false;
+
+        loop {
+            match process_control_packet(
+                &socket,
+                &mut buffer,
+                &mut lobbies,
+                &mut relay_matches,
+                &relay_advertise,
+                &mut next_client_id,
+            ) {
+                Ok(true) => did_work = true,
+                Ok(false) => break,
+                Err(error) => {
+                    eprintln!("matchmaker packet error: {error}");
+                    break;
+                }
             }
         }
 
-        maybe_auto_start_lobbies(&socket, &mut lobbies);
+        loop {
+            match process_relay_packet(&relay_socket, &mut relay_buffer, &mut relay_matches) {
+                Ok(true) => did_work = true,
+                Ok(false) => break,
+                Err(error) => {
+                    eprintln!("relay packet error: {error}");
+                    break;
+                }
+            }
+        }
+
+        maybe_auto_start_lobbies(&socket, &mut lobbies, &mut relay_matches, &relay_advertise);
         broadcast_countdown_updates(&socket, &mut lobbies);
 
         if last_cleanup.elapsed() >= Duration::from_secs(1) {
@@ -111,19 +182,38 @@ fn main() {
                     );
                 }
             }
+            remove_stale_relay_clients(
+                &mut relay_matches,
+                Duration::from_secs(STALE_RELAY_CLIENT_SECS),
+            );
             last_cleanup = Instant::now();
+        }
+
+        if !did_work {
+            thread::sleep(Duration::from_millis(1));
         }
     }
 }
 
-fn process_tick(
+fn process_control_packet(
     socket: &UdpSocket,
     buffer: &mut [u8],
     lobbies: &mut HashMap<String, Lobby>,
+    relay_matches: &mut HashMap<String, RelayMatch>,
+    relay_advertise: &str,
     next_client_id: &mut u64,
-) -> io::Result<()> {
+) -> io::Result<bool> {
     let (request, remote_addr) = {
-        let (size, from_addr) = socket.recv_from(buffer)?;
+        let (size, from_addr) = match socket.recv_from(buffer) {
+            Ok(value) => value,
+            Err(error)
+                if error.kind() == io::ErrorKind::WouldBlock
+                    || error.kind() == io::ErrorKind::TimedOut =>
+            {
+                return Ok(false);
+            }
+            Err(error) => return Err(error),
+        };
         let request = deserialize_request::<MatchRequest>(&buffer[..size])?;
         (request, from_addr)
     };
@@ -134,7 +224,6 @@ fn process_tick(
         }
         MatchRequest::CreateLobby {
             player_name,
-            game_addr,
             target_players,
             game_mode,
             map_size,
@@ -144,7 +233,6 @@ fn process_tick(
                 next_client_id,
                 remote_addr,
                 player_name,
-                game_addr,
                 target_players,
                 game_mode,
                 map_size,
@@ -187,13 +275,11 @@ fn process_tick(
         MatchRequest::JoinLobby {
             lobby_code,
             player_name,
-            game_addr,
         } => match join_lobby(
             lobbies,
             &lobby_code,
             remote_addr,
             player_name,
-            game_addr,
             *next_client_id,
         ) {
             Ok((player_id, lobby_state)) => {
@@ -218,7 +304,7 @@ fn process_tick(
                         },
                     )?;
                 }
-                maybe_auto_start(socket, lobbies, &lobby_code);
+                maybe_auto_start(socket, lobbies, relay_matches, relay_advertise, &lobby_code);
             }
             Err(error) => {
                 send_match_event(
@@ -265,7 +351,14 @@ fn process_tick(
         MatchRequest::StartMatch {
             lobby_code,
             client_id,
-        } => match try_start_match_by_requester(socket, lobbies, &lobby_code, client_id) {
+        } => match try_start_match_by_requester(
+            socket,
+            lobbies,
+            relay_matches,
+            relay_advertise,
+            &lobby_code,
+            client_id,
+        ) {
             Ok(true) => {
                 println!("match-start: lobby={lobby_code} by host={client_id}");
             }
@@ -310,13 +403,12 @@ fn process_tick(
         MatchRequest::Heartbeat {
             lobby_code,
             client_id,
-            game_addr,
         } => {
-            heartbeat_lobby(lobbies, &lobby_code, client_id, game_addr, remote_addr)?;
+            heartbeat_lobby(lobbies, &lobby_code, client_id, remote_addr)?;
         }
     }
 
-    Ok(())
+    Ok(true)
 }
 
 fn create_lobby(
@@ -324,7 +416,6 @@ fn create_lobby(
     next_client_id: &mut u64,
     remote_addr: SocketAddr,
     player_name: String,
-    game_addr: String,
     target_players: u8,
     game_mode: GameMode,
     map_size: MapSize,
@@ -342,7 +433,6 @@ fn create_lobby(
             info: PlayerInfo {
                 client_id,
                 name: player_name,
-                game_addr,
             },
             remote_addr,
             last_seen: Instant::now(),
@@ -359,7 +449,11 @@ fn create_lobby(
         host_client_id: Some(client_id),
         target_players,
         game_mode,
-        map_size: if game_mode == GameMode::CaptureTheFlag { map_size } else { MapSize::Small },
+        map_size: if game_mode == GameMode::CaptureTheFlag {
+            map_size
+        } else {
+            MapSize::Small
+        },
         ctf_assignments: if game_mode == GameMode::CaptureTheFlag {
             vec![CtfSlotAssignment {
                 client_id,
@@ -384,7 +478,6 @@ fn join_lobby(
     lobby_code: &str,
     remote_addr: SocketAddr,
     player_name: String,
-    game_addr: String,
     next_client_id: u64,
 ) -> io::Result<(u64, LobbyState)> {
     let now = Instant::now();
@@ -409,7 +502,6 @@ fn join_lobby(
             info: PlayerInfo {
                 client_id,
                 name: player_name,
-                game_addr,
             },
             remote_addr,
             last_seen: now,
@@ -498,7 +590,6 @@ fn heartbeat_lobby(
     lobbies: &mut HashMap<String, Lobby>,
     lobby_code: &str,
     client_id: u64,
-    game_addr: Option<String>,
     remote_addr: SocketAddr,
 ) -> io::Result<()> {
     let now = Instant::now();
@@ -512,9 +603,6 @@ fn heartbeat_lobby(
 
     player.last_seen = now;
     player.remote_addr = remote_addr;
-    if let Some(game_addr) = game_addr {
-        player.info.game_addr = game_addr;
-    }
     lobby.last_activity = now;
 
     Ok(())
@@ -523,6 +611,8 @@ fn heartbeat_lobby(
 fn maybe_auto_start(
     socket: &UdpSocket,
     lobbies: &mut HashMap<String, Lobby>,
+    relay_matches: &mut HashMap<String, RelayMatch>,
+    relay_advertise: &str,
     lobby_code: &str,
 ) -> bool {
     let should_start = lobbies
@@ -532,10 +622,15 @@ fn maybe_auto_start(
     if !should_start {
         return false;
     }
-    try_start_match(socket, lobbies, lobby_code)
+    try_start_match(socket, lobbies, relay_matches, relay_advertise, lobby_code)
 }
 
-fn maybe_auto_start_lobbies(socket: &UdpSocket, lobbies: &mut HashMap<String, Lobby>) {
+fn maybe_auto_start_lobbies(
+    socket: &UdpSocket,
+    lobbies: &mut HashMap<String, Lobby>,
+    relay_matches: &mut HashMap<String, RelayMatch>,
+    relay_advertise: &str,
+) {
     let to_start: Vec<String> = lobbies
         .iter()
         .filter_map(|(code, lobby)| {
@@ -548,7 +643,7 @@ fn maybe_auto_start_lobbies(socket: &UdpSocket, lobbies: &mut HashMap<String, Lo
         .collect();
 
     for code in to_start {
-        if try_start_match(socket, lobbies, &code) {
+        if try_start_match(socket, lobbies, relay_matches, relay_advertise, &code) {
             println!("match-start: lobby={code}");
         }
     }
@@ -557,6 +652,8 @@ fn maybe_auto_start_lobbies(socket: &UdpSocket, lobbies: &mut HashMap<String, Lo
 fn try_start_match_by_requester(
     socket: &UdpSocket,
     lobbies: &mut HashMap<String, Lobby>,
+    relay_matches: &mut HashMap<String, RelayMatch>,
+    relay_advertise: &str,
     lobby_code: &str,
     requester_client_id: u64,
 ) -> io::Result<bool> {
@@ -570,7 +667,13 @@ fn try_start_match_by_requester(
         }
     }
 
-    Ok(try_start_match(socket, lobbies, lobby_code))
+    Ok(try_start_match(
+        socket,
+        lobbies,
+        relay_matches,
+        relay_advertise,
+        lobby_code,
+    ))
 }
 
 fn should_auto_start_lobby(lobby: &Lobby) -> bool {
@@ -591,6 +694,8 @@ fn should_auto_start_lobby(lobby: &Lobby) -> bool {
 fn try_start_match(
     socket: &UdpSocket,
     lobbies: &mut HashMap<String, Lobby>,
+    relay_matches: &mut HashMap<String, RelayMatch>,
+    relay_advertise: &str,
     lobby_code: &str,
 ) -> bool {
     let lobby = match lobbies.get_mut(lobby_code) {
@@ -621,25 +726,251 @@ fn try_start_match(
         }
     };
 
-    let mut endpoints = lobby_state_for(lobby).players;
-    endpoints.sort_by_key(|player| player.client_id);
+    let mut players = lobby_state_for(lobby).players;
+    players.sort_by_key(|player| player.client_id);
+    let player_targets: Vec<(u64, SocketAddr)> = lobby
+        .players
+        .iter()
+        .map(|(client_id, player)| (*client_id, player.remote_addr))
+        .collect();
 
     lobby.started = true;
     lobby.host_client_id = Some(host_client_id);
     lobby.last_activity = Instant::now();
     lobby.last_countdown_sent = None;
 
-    let event = MatchEvent::MatchStart {
-        lobby_code: lobby_code.to_string(),
-        host_client_id,
-        seed: lobby.shared_seed,
-        player_endpoints: endpoints,
-        game_mode: lobby.game_mode,
-        map_size: lobby.map_size,
-        ctf_assignments: lobby.ctf_assignments.clone(),
+    let mut relay_players = HashMap::new();
+    let mut start_events = Vec::new();
+
+    for (client_id, remote_addr) in player_targets {
+        let token = generate_relay_token();
+        relay_players.insert(
+            client_id,
+            RelayPlayer {
+                token: token.clone(),
+                remote_addr: None,
+                last_seen: Instant::now(),
+            },
+        );
+        start_events.push((
+            remote_addr,
+            MatchEvent::MatchStart {
+                lobby_code: lobby_code.to_string(),
+                host_client_id,
+                seed: lobby.shared_seed,
+                players: players.clone(),
+                relay: RelayConnectInfo {
+                    match_id: lobby_code.to_string(),
+                    udp_endpoint: relay_advertise.to_string(),
+                    client_id,
+                    session_token: token,
+                    heartbeat_secs: DEFAULT_RELAY_HEARTBEAT_SECS,
+                },
+                game_mode: lobby.game_mode,
+                map_size: lobby.map_size,
+                ctf_assignments: lobby.ctf_assignments.clone(),
+            },
+        ));
+    }
+
+    relay_matches.insert(
+        lobby_code.to_string(),
+        RelayMatch {
+            players: relay_players,
+            last_activity: Instant::now(),
+        },
+    );
+
+    start_events
+        .into_iter()
+        .all(|(remote_addr, event)| send_match_event(socket, &remote_addr, &event).is_ok())
+}
+
+fn process_relay_packet(
+    socket: &UdpSocket,
+    buffer: &mut [u8],
+    relay_matches: &mut HashMap<String, RelayMatch>,
+) -> io::Result<bool> {
+    let (size, from_addr) = match socket.recv_from(buffer) {
+        Ok(value) => value,
+        Err(error)
+            if error.kind() == io::ErrorKind::WouldBlock
+                || error.kind() == io::ErrorKind::TimedOut =>
+        {
+            return Ok(false);
+        }
+        Err(error) => return Err(error),
     };
 
-    broadcast_lobby(socket, lobby, event).is_ok()
+    let packet = deserialize_relay_packet::<RelayClientPacket>(&buffer[..size])?;
+    match packet {
+        RelayClientPacket::Register {
+            protocol_version,
+            match_id,
+            client_id,
+            session_token,
+        } => {
+            if authenticate_relay_player(
+                relay_matches,
+                &match_id,
+                client_id,
+                &session_token,
+                from_addr,
+                protocol_version,
+            )
+            .is_ok()
+            {
+                send_relay_packet(
+                    socket,
+                    from_addr,
+                    &RelayServerPacket::Registered {
+                        match_id,
+                        client_id,
+                    },
+                )?;
+            } else {
+                send_relay_error(socket, from_addr, "relay registration rejected")?;
+            }
+        }
+        RelayClientPacket::Payload {
+            protocol_version,
+            match_id,
+            client_id,
+            session_token,
+            sequence,
+            message,
+        } => {
+            if let Err(error) = authenticate_relay_player(
+                relay_matches,
+                &match_id,
+                client_id,
+                &session_token,
+                from_addr,
+                protocol_version,
+            ) {
+                eprintln!("relay auth failed: {error}");
+                send_relay_error(socket, from_addr, "relay authentication failed")?;
+                return Ok(true);
+            }
+
+            relay_gameplay_message(
+                socket,
+                relay_matches,
+                &match_id,
+                client_id,
+                sequence,
+                message,
+            )?;
+        }
+        RelayClientPacket::Heartbeat {
+            protocol_version,
+            match_id,
+            client_id,
+            session_token,
+        } => {
+            if authenticate_relay_player(
+                relay_matches,
+                &match_id,
+                client_id,
+                &session_token,
+                from_addr,
+                protocol_version,
+            )
+            .is_err()
+            {
+                send_relay_error(socket, from_addr, "relay heartbeat rejected")?;
+            }
+        }
+    }
+
+    Ok(true)
+}
+
+fn authenticate_relay_player(
+    relay_matches: &mut HashMap<String, RelayMatch>,
+    match_id: &str,
+    client_id: u64,
+    session_token: &str,
+    remote_addr: SocketAddr,
+    protocol_version: u16,
+) -> io::Result<()> {
+    if protocol_version != RELAY_PROTOCOL_VERSION {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "unsupported relay protocol version",
+        ));
+    }
+
+    let relay_match = relay_matches
+        .get_mut(match_id)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "relay match not found"))?;
+    let player = relay_match
+        .players
+        .get_mut(&client_id)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::PermissionDenied, "unknown relay player"))?;
+
+    if player.token != session_token {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "invalid relay token",
+        ));
+    }
+
+    player.remote_addr = Some(remote_addr);
+    player.last_seen = Instant::now();
+    relay_match.last_activity = Instant::now();
+    Ok(())
+}
+
+fn relay_gameplay_message(
+    socket: &UdpSocket,
+    relay_matches: &HashMap<String, RelayMatch>,
+    match_id: &str,
+    from_client_id: u64,
+    sequence: u64,
+    message: NetMessage,
+) -> io::Result<()> {
+    let relay_match = relay_matches
+        .get(match_id)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "relay match not found"))?;
+
+    let packet = RelayServerPacket::Payload {
+        from_client_id,
+        sequence,
+        message,
+    };
+    let payload = serialize_relay_packet(&packet)?;
+
+    for (client_id, player) in &relay_match.players {
+        if *client_id == from_client_id {
+            continue;
+        }
+        if let Some(remote_addr) = player.remote_addr {
+            let _ = socket.send_to(&payload, remote_addr);
+        }
+    }
+
+    Ok(())
+}
+
+fn send_relay_error(socket: &UdpSocket, remote_addr: SocketAddr, message: &str) -> io::Result<()> {
+    send_relay_packet(
+        socket,
+        remote_addr,
+        &RelayServerPacket::Error {
+            message: message.to_string(),
+        },
+    )
+}
+
+fn send_relay_packet(
+    socket: &UdpSocket,
+    remote_addr: SocketAddr,
+    packet: &RelayServerPacket,
+) -> io::Result<()> {
+    let payload = serialize_relay_packet(packet)?;
+    let _ = socket.send_to(&payload, remote_addr)?;
+    Ok(())
 }
 
 fn remove_stale_players(lobbies: &mut HashMap<String, Lobby>, timeout: Duration) -> Vec<String> {
@@ -648,6 +979,10 @@ fn remove_stale_players(lobbies: &mut HashMap<String, Lobby>, timeout: Duration)
     let mut empty_codes: Vec<String> = Vec::new();
 
     for lobby in lobbies.values_mut() {
+        if lobby.started {
+            continue;
+        }
+
         let stale_ids: Vec<u64> = lobby
             .players
             .iter()
@@ -688,6 +1023,25 @@ fn remove_stale_players(lobbies: &mut HashMap<String, Lobby>, timeout: Duration)
     }
 
     updated_codes
+}
+
+fn remove_stale_relay_clients(relay_matches: &mut HashMap<String, RelayMatch>, timeout: Duration) {
+    let now = Instant::now();
+    relay_matches.retain(|match_id, relay_match| {
+        relay_match.players.retain(|client_id, player| {
+            let keep = now.duration_since(player.last_seen) <= timeout;
+            if !keep {
+                println!("relay-client-timeout: match={match_id} client={client_id}");
+            }
+            keep
+        });
+
+        let keep_match = !relay_match.players.is_empty();
+        if !keep_match {
+            println!("relay-match-removed: match={match_id}");
+        }
+        keep_match
+    });
 }
 
 fn broadcast_countdown_updates(socket: &UdpSocket, lobbies: &mut HashMap<String, Lobby>) {
@@ -776,16 +1130,12 @@ fn assign_default_ctf_slot(lobby: &mut Lobby, client_id: u64) {
     {
         return;
     }
-    let Some(slot) = CtfSlot::ASSIGNMENT_SLOTS
-        .iter()
-        .copied()
-        .find(|slot| {
-            !lobby
-                .ctf_assignments
-                .iter()
-                .any(|assignment| assignment.primary_slot == *slot)
-        })
-    else {
+    let Some(slot) = CtfSlot::ASSIGNMENT_SLOTS.iter().copied().find(|slot| {
+        !lobby
+            .ctf_assignments
+            .iter()
+            .any(|assignment| assignment.primary_slot == *slot)
+    }) else {
         return;
     };
     lobby.ctf_assignments.push(CtfSlotAssignment {
@@ -969,6 +1319,24 @@ fn generate_lobby_code() -> String {
     format!("{:04}", rng.gen_range(0..10_000))
 }
 
+fn generate_relay_token() -> String {
+    let mut rng = rand::thread_rng();
+    format!("{:016x}{:016x}", rng.gen::<u64>(), rng.gen::<u64>())
+}
+
+fn advertise_addr_for(bind_addr: SocketAddr) -> String {
+    let advertised_ip = if bind_addr.ip().is_unspecified() {
+        if bind_addr.is_ipv4() {
+            IpAddr::V4(Ipv4Addr::LOCALHOST)
+        } else {
+            IpAddr::V6(Ipv6Addr::LOCALHOST)
+        }
+    } else {
+        bind_addr.ip()
+    };
+    SocketAddr::new(advertised_ip, bind_addr.port()).to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -988,7 +1356,6 @@ mod tests {
                     info: PlayerInfo {
                         client_id: id,
                         name: format!("P{id}"),
-                        game_addr: format!("127.0.0.1:{}", 7000 + id),
                     },
                     remote_addr: format!("127.0.0.1:{}", 9000 + id)
                         .parse()
@@ -1078,8 +1445,9 @@ mod tests {
                 },
             ],
         );
-        assert!(validate_ctf_assignments(&missing_blue, &missing_blue.ctf_assignments, true)
-            .is_err());
+        assert!(
+            validate_ctf_assignments(&missing_blue, &missing_blue.ctf_assignments, true).is_err()
+        );
 
         let duplicate_slot = ctf_test_lobby(
             2,
@@ -1094,8 +1462,10 @@ mod tests {
                 },
             ],
         );
-        assert!(validate_ctf_assignments(&duplicate_slot, &duplicate_slot.ctf_assignments, true)
-            .is_err());
+        assert!(
+            validate_ctf_assignments(&duplicate_slot, &duplicate_slot.ctf_assignments, true)
+                .is_err()
+        );
 
         let valid = ctf_test_lobby(
             2,

@@ -7,15 +7,15 @@ with a wgpu renderer, winit windowing, and an imgui debug UI.
 
 ## Architecture Diagrams
 
-### 1) Multiplayer networking (matchmaking + peer-to-peer gameplay)
+### 1) Multiplayer networking (matchmaking + relay gameplay)
 
 ```mermaid
 flowchart LR
     PEERS["Game peers (players)"] -->|"Create/Join lobby"| MM["Matchmaker"]
-    MM -->|"MatchStart + endpoints"| HOST["Host peer"]
-    MM -->|"MatchStart + endpoints"| CLIENT["Client peer(s)"]
-    CLIENT -->|"Input"| HOST
-    HOST -->|"Replicated state / corrections"| CLIENT
+    MM -->|"MatchStart + relay token"| HOST["Host peer"]
+    MM -->|"MatchStart + relay token"| CLIENT["Client peer(s)"]
+    HOST <-->|"Input / hash / snapshot packets"| MM
+    CLIENT <-->|"Input / hash / snapshot packets"| MM
 ```
 
 ### 2) ECS update model and graphics rendering path
@@ -34,31 +34,30 @@ flowchart TD
 
 ```bash
 # terminal 1: matchmaker (listen on all interfaces)
-cargo run --bin matchmaker -- --bind 0.0.0.0:7000
+cargo run --bin matchmaker -- --bind 0.0.0.0:7000 --relay-bind 0.0.0.0:7001
 
 # terminal 2: player client (launcher UI)
 cargo run --bin game 
-# optional: override default gameplay UDP port (default is 7001)
-cargo run --bin game -- --game-port 7010
 ```
 Enter 127.0.0.1:7000 as the matchmaker address and click "Connect", then proceed to create or join a lobby. 
 If the client runs on another machine, replace `127.0.0.1` with the matchmaker host's LAN IP.
 
-### Firewall setup for LAN multiplayer (Windows + Linux)
+### Firewall setup
 
-The demo uses UDP:
+Only the matchmaker/relay host needs inbound UDP:
 - `7000` for matchmaker
-- `7001` for gameplay peers by default (`--game-port` changes this)
+- `7001` for relayed gameplay packets
 
-Open these ports on every machine that hosts matchmaker or runs a player client.
+Player machines only need outbound UDP access to those ports. They do not need
+router port forwarding, UPnP, NAT-PMP, STUN, TURN, or inbound firewall rules.
 
 Windows (PowerShell as Administrator):
 
 ```powershell
 netsh advfirewall firewall add rule name="Forge Matchmaker UDP 7000 In" dir=in action=allow protocol=UDP localport=7000 profile=private
 netsh advfirewall firewall add rule name="Forge Matchmaker UDP 7000 Out" dir=out action=allow protocol=UDP localport=7000 profile=private
-netsh advfirewall firewall add rule name="Forge Gameplay UDP 7001 In" dir=in action=allow protocol=UDP localport=7001 profile=private
-netsh advfirewall firewall add rule name="Forge Gameplay UDP 7001 Out" dir=out action=allow protocol=UDP localport=7001 profile=private
+netsh advfirewall firewall add rule name="Forge Relay UDP 7001 In" dir=in action=allow protocol=UDP localport=7001 profile=private
+netsh advfirewall firewall add rule name="Forge Relay UDP 7001 Out" dir=out action=allow protocol=UDP localport=7001 profile=private
 ```
 
 Linux (`ufw`):
@@ -77,7 +76,8 @@ sudo firewall-cmd --permanent --add-port=7001/udp
 sudo firewall-cmd --reload
 ```
 
-If you run clients with a non-default gameplay port, open that UDP port instead of `7001`.
+Google Cloud deployment steps are in
+[docs/google-cloud-relay-deployment.md](docs/google-cloud-relay-deployment.md).
 
 ---
 

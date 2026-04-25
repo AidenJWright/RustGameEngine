@@ -1,0 +1,431 @@
+Apr 24 12:36:00 Arch-Nitro systemd[1]: Starting Docker Application Container Engine...
+░░ Subject: A start job for unit docker.service has begun execution
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A start job for unit docker.service has begun execution.
+░░ 
+░░ The job identifier is 243.
+Apr 24 12:36:00 Arch-Nitro dockerd[906]: time="2026-04-24T12:36:00.660001885-07:00" level=info msg="Starting up"
+Apr 24 12:36:00 Arch-Nitro dockerd[906]: time="2026-04-24T12:36:00.663614953-07:00" level=info msg="OTEL tracing is not configured, using no-op tracer provider"
+Apr 24 12:36:00 Arch-Nitro dockerd[906]: time="2026-04-24T12:36:00.671871609-07:00" level=info msg="CDI directory does not exist, skipping" dir=/var/run/cdi
+Apr 24 12:36:00 Arch-Nitro dockerd[906]: time="2026-04-24T12:36:00.691750965-07:00" level=info msg="Creating a containerd client" address=/run/containerd/containerd.sock timeout=1m0s
+Apr 24 12:36:00 Arch-Nitro dockerd[906]: time="2026-04-24T12:36:00.699857698-07:00" level=info msg="Loading containers: start."
+Apr 24 12:36:00 Arch-Nitro dockerd[906]: time="2026-04-24T12:36:00.700439404-07:00" level=info msg="NRI is disabled"
+Apr 24 12:36:00 Arch-Nitro dockerd[906]: time="2026-04-24T12:36:00.700490160-07:00" level=info msg="Starting daemon with containerd snapshotter integration enabled"
+Apr 24 12:36:00 Arch-Nitro dockerd[906]: time="2026-04-24T12:36:00.709123933-07:00" level=info msg="Restoring containers: start."
+Apr 24 12:36:00 Arch-Nitro dockerd[906]: time="2026-04-24T12:36:00.763331832-07:00" level=info msg="Deleting nftables IPv4 rules" error="exit status 1" output="Error: Could not process rule: No such file or directory\ndelete table ip docker-bridges"
+Apr 24 12:36:00 Arch-Nitro dockerd[906]: time="2026-04-24T12:36:00.798682877-07:00" level=info msg="Deleting nftables IPv6 rules" error="exit status 1" output="Error: Could not process rule: No such file or directory\ndelete table ip6 docker-bridges"
+Apr 24 12:36:01 Arch-Nitro dockerd[906]: time="2026-04-24T12:36:01.130468392-07:00" level=info msg="Loading containers: done."
+Apr 24 12:36:01 Arch-Nitro dockerd[906]: time="2026-04-24T12:36:01.142186560-07:00" level=info msg="Docker daemon" commit=83bca512aa containerd-snapshotter=true storage-driver=overlayfs version=29.3.0
+Apr 24 12:36:01 Arch-Nitro dockerd[906]: time="2026-04-24T12:36:01.142516057-07:00" level=info msg="Initializing buildkit"
+Apr 24 12:36:01 Arch-Nitro dockerd[906]: time="2026-04-24T12:36:01.162810590-07:00" level=info msg="Completed buildkit initialization"
+Apr 24 12:36:01 Arch-Nitro dockerd[906]: time="2026-04-24T12:36:01.171281030-07:00" level=info msg="Daemon has completed initialization"
+Apr 24 12:36:01 Arch-Nitro dockerd[906]: time="2026-04-24T12:36:01.171336666-07:00" level=info msg="API listen on /run/docker.sock"
+Apr 24 12:36:01 Arch-Nitro systemd[1]: Started Docker Application Container Engine.
+░░ Subject: A start job for unit docker.service has finished successfully
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A start job for unit docker.service has finished successfully.
+░░ 
+░░ The job identifier is 243.
+Apr 24 19:47:17 Arch-Nitro dockerd[906]: time="2026-04-24T19:47:17.284258225-07:00" level=info msg="image pulled" digest="sha256:e51d0265072d2d9d5d320f6a44dde6b9ef13653b035098febd68cce8fa7c0bc4" remote="docker.io/library/rust:1.85-bookworm"
+Apr 24 19:47:18 Arch-Nitro dockerd[906]: time="2026-04-24T19:47:18.922840268-07:00" level=info msg="image created" imageID="sha256:8506829b694982cc2282a938bd02dd185bc7a2b53f7f650fd6eda633646bdf68" tag="moby-dangling@sha256:8506829b694982cc2282a938bd02dd185bc7a2b53f7f650fd6eda633646bdf68"
+Apr 24 19:47:20 Arch-Nitro dockerd[906]: time="2026-04-24T19:47:20.265368677-07:00" level=info msg="image created" imageID="sha256:3cd4951c41e3b49bf4fb7745a682a27358a63a55268f1cf04393e0c9e2f55b2d" tag="moby-dangling@sha256:3cd4951c41e3b49bf4fb7745a682a27358a63a55268f1cf04393e0c9e2f55b2d"
+Apr 24 19:47:20 Arch-Nitro dockerd[906]: time="2026-04-24T19:47:20.537403364-07:00" level=info msg="received task-delete event from containerd" container=b1ced8cc8a98d7784b2776e8cd2593e7baf6133c30e59285c40fd28bb432256f module=libcontainerd namespace=moby topic=/tasks/delete type="*events.TaskDelete"
+Apr 24 19:48:09 Arch-Nitro dockerd[906]: time="2026-04-24T19:48:09.981179792-07:00" level=info msg="received task-delete event from containerd" container=ee340283a04c2b0ee07e15cc9856e65dbc0374b101ac0e6d04485a8b5d94e2ab module=libcontainerd namespace=moby topic=/tasks/delete type="*events.TaskDelete"
+Apr 24 19:52:25 Arch-Nitro systemd[1]: Stopping Docker Application Container Engine...
+░░ Subject: A stop job for unit docker.service has begun execution
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A stop job for unit docker.service has begun execution.
+░░ 
+░░ The job identifier is 22996.
+Apr 24 19:52:25 Arch-Nitro dockerd[906]: time="2026-04-24T19:52:25.706020926-07:00" level=info msg="Processing signal 'terminated'"
+Apr 24 19:52:25 Arch-Nitro dockerd[906]: time="2026-04-24T19:52:25.706906125-07:00" level=info msg="stopping event stream following graceful shutdown" error="<nil>" module=libcontainerd namespace=moby
+Apr 24 19:52:25 Arch-Nitro dockerd[906]: time="2026-04-24T19:52:25.707491809-07:00" level=info msg="Daemon shutdown complete"
+Apr 24 19:52:25 Arch-Nitro systemd[1]: docker.service: Deactivated successfully.
+░░ Subject: Unit succeeded
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ The unit docker.service has successfully entered the 'dead' state.
+Apr 24 19:52:25 Arch-Nitro systemd[1]: Stopped Docker Application Container Engine.
+░░ Subject: A stop job for unit docker.service has finished
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A stop job for unit docker.service has finished.
+░░ 
+░░ The job identifier is 22996 and the job result is done.
+Apr 24 19:52:25 Arch-Nitro systemd[1]: docker.service: Consumed 14.135s CPU time over 7h 16min 25.325s wall clock time, 160.2M memory peak.
+░░ Subject: Resources consumed by unit runtime
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ The unit docker.service completed and consumed the indicated resources.
+Apr 24 19:52:25 Arch-Nitro systemd[1]: Starting Docker Application Container Engine...
+░░ Subject: A start job for unit docker.service has begun execution
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A start job for unit docker.service has begun execution.
+░░ 
+░░ The job identifier is 22996.
+Apr 24 19:52:26 Arch-Nitro dockerd[290513]: time="2026-04-24T19:52:26.003580783-07:00" level=info msg="Starting up"
+Apr 24 19:52:26 Arch-Nitro dockerd[290513]: time="2026-04-24T19:52:26.006877625-07:00" level=info msg="OTEL tracing is not configured, using no-op tracer provider"
+Apr 24 19:52:26 Arch-Nitro dockerd[290513]: time="2026-04-24T19:52:26.013099588-07:00" level=info msg="CDI directory does not exist, skipping" dir=/var/run/cdi
+Apr 24 19:52:26 Arch-Nitro dockerd[290513]: time="2026-04-24T19:52:26.025857226-07:00" level=info msg="Creating a containerd client" address=/run/containerd/containerd.sock timeout=1m0s
+Apr 24 19:52:26 Arch-Nitro dockerd[290513]: time="2026-04-24T19:52:26.031639957-07:00" level=info msg="Loading containers: start."
+Apr 24 19:52:26 Arch-Nitro dockerd[290513]: time="2026-04-24T19:52:26.032983606-07:00" level=info msg="NRI is disabled"
+Apr 24 19:52:26 Arch-Nitro dockerd[290513]: time="2026-04-24T19:52:26.033005351-07:00" level=info msg="Starting daemon with containerd snapshotter integration enabled"
+Apr 24 19:52:26 Arch-Nitro dockerd[290513]: time="2026-04-24T19:52:26.039383774-07:00" level=info msg="Restoring containers: start."
+Apr 24 19:52:26 Arch-Nitro dockerd[290513]: time="2026-04-24T19:52:26.092548420-07:00" level=info msg="Deleting nftables IPv4 rules" error="exit status 1" output="Error: Could not process rule: No such file or directory\ndelete table ip docker-bridges"
+Apr 24 19:52:26 Arch-Nitro dockerd[290513]: time="2026-04-24T19:52:26.132682748-07:00" level=info msg="Deleting nftables IPv6 rules" error="exit status 1" output="Error: Could not process rule: No such file or directory\ndelete table ip6 docker-bridges"
+Apr 24 19:52:26 Arch-Nitro dockerd[290513]: time="2026-04-24T19:52:26.587493513-07:00" level=info msg="stopping event stream following graceful shutdown" error="<nil>" module=libcontainerd namespace=moby
+Apr 24 19:52:26 Arch-Nitro dockerd[290513]: time="2026-04-24T19:52:26.588214607-07:00" level=info msg="Daemon shutdown complete" error="failed to start daemon: Error initializing network controller: error obtaining controller instance: failed to register \"bridge\" driver: failed to add jump rules to ipv4 NAT table: failed to append jump rules to nat-PREROUTING:  (iptables failed: iptables --wait -t nat -A PREROUTING -m addrtype --dst-type LOCAL -j DOCKER: Warning: Extension addrtype revision 0 not supported, missing kernel module?\niptables v1.8.13 (nf_tables):  CHAIN_ADD failed (No such file or directory): chain PREROUTING\n (exit status 4))"
+Apr 24 19:52:26 Arch-Nitro dockerd[290513]: failed to start daemon: Error initializing network controller: error obtaining controller instance: failed to register "bridge" driver: failed to add jump rules to ipv4 NAT table: failed to append jump rules to nat-PREROUTING:  (iptables failed: iptables --wait -t nat -A PREROUTING -m addrtype --dst-type LOCAL -j DOCKER: Warning: Extension addrtype revision 0 not supported, missing kernel module?
+Apr 24 19:52:26 Arch-Nitro dockerd[290513]: iptables v1.8.13 (nf_tables):  CHAIN_ADD failed (No such file or directory): chain PREROUTING
+Apr 24 19:52:26 Arch-Nitro dockerd[290513]:  (exit status 4))
+Apr 24 19:52:26 Arch-Nitro systemd[1]: docker.service: Main process exited, code=exited, status=1/FAILURE
+░░ Subject: Unit process exited
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ An ExecStart= process belonging to unit docker.service has exited.
+░░ 
+░░ The process' exit code is 'exited' and its exit status is 1.
+Apr 24 19:52:26 Arch-Nitro systemd[1]: docker.service: Failed with result 'exit-code'.
+░░ Subject: Unit failed
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ The unit docker.service has entered the 'failed' state with result 'exit-code'.
+Apr 24 19:52:26 Arch-Nitro systemd[1]: Failed to start Docker Application Container Engine.
+░░ Subject: A start job for unit docker.service has failed
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A start job for unit docker.service has finished with a failure.
+░░ 
+░░ The job identifier is 22996 and the job result is failed.
+Apr 24 19:52:26 Arch-Nitro systemd[1]: docker.service: Consumed 342ms CPU time over 878ms wall clock time, 101.6M memory peak.
+░░ Subject: Resources consumed by unit runtime
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ The unit docker.service completed and consumed the indicated resources.
+Apr 24 19:52:28 Arch-Nitro systemd[1]: docker.service: Scheduled restart job, restart counter is at 1.
+░░ Subject: Automatic restarting of a unit has been scheduled
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ Automatic restarting of the unit docker.service has been scheduled, as the result for
+░░ the configured Restart= setting for the unit.
+Apr 24 19:52:28 Arch-Nitro systemd[1]: Starting Docker Application Container Engine...
+░░ Subject: A start job for unit docker.service has begun execution
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A start job for unit docker.service has begun execution.
+░░ 
+░░ The job identifier is 23127.
+Apr 24 19:52:28 Arch-Nitro dockerd[290618]: time="2026-04-24T19:52:28.864726647-07:00" level=info msg="Starting up"
+Apr 24 19:52:28 Arch-Nitro dockerd[290618]: time="2026-04-24T19:52:28.865493116-07:00" level=info msg="OTEL tracing is not configured, using no-op tracer provider"
+Apr 24 19:52:28 Arch-Nitro dockerd[290618]: time="2026-04-24T19:52:28.867684594-07:00" level=info msg="CDI directory does not exist, skipping" dir=/var/run/cdi
+Apr 24 19:52:28 Arch-Nitro dockerd[290618]: time="2026-04-24T19:52:28.879272892-07:00" level=info msg="Creating a containerd client" address=/run/containerd/containerd.sock timeout=1m0s
+Apr 24 19:52:28 Arch-Nitro dockerd[290618]: time="2026-04-24T19:52:28.883318270-07:00" level=info msg="Loading containers: start."
+Apr 24 19:52:28 Arch-Nitro dockerd[290618]: time="2026-04-24T19:52:28.884394934-07:00" level=info msg="NRI is disabled"
+Apr 24 19:52:28 Arch-Nitro dockerd[290618]: time="2026-04-24T19:52:28.884406974-07:00" level=info msg="Starting daemon with containerd snapshotter integration enabled"
+Apr 24 19:52:28 Arch-Nitro dockerd[290618]: time="2026-04-24T19:52:28.887071360-07:00" level=info msg="Restoring containers: start."
+Apr 24 19:52:28 Arch-Nitro dockerd[290618]: time="2026-04-24T19:52:28.936117164-07:00" level=info msg="Deleting nftables IPv4 rules" error="exit status 1" output="Error: Could not process rule: No such file or directory\ndelete table ip docker-bridges"
+Apr 24 19:52:28 Arch-Nitro dockerd[290618]: time="2026-04-24T19:52:28.972954151-07:00" level=info msg="Deleting nftables IPv6 rules" error="exit status 1" output="Error: Could not process rule: No such file or directory\ndelete table ip6 docker-bridges"
+Apr 24 19:52:29 Arch-Nitro dockerd[290618]: time="2026-04-24T19:52:29.387563217-07:00" level=info msg="stopping event stream following graceful shutdown" error="<nil>" module=libcontainerd namespace=moby
+Apr 24 19:52:29 Arch-Nitro dockerd[290618]: time="2026-04-24T19:52:29.388046717-07:00" level=info msg="Daemon shutdown complete" error="failed to start daemon: Error initializing network controller: error obtaining controller instance: failed to register \"bridge\" driver: failed to add jump rules to ipv4 NAT table: failed to append jump rules to nat-PREROUTING:  (iptables failed: iptables --wait -t nat -A PREROUTING -m addrtype --dst-type LOCAL -j DOCKER: Warning: Extension addrtype revision 0 not supported, missing kernel module?\niptables v1.8.13 (nf_tables):  CHAIN_ADD failed (No such file or directory): chain PREROUTING\n (exit status 4))"
+Apr 24 19:52:29 Arch-Nitro dockerd[290618]: failed to start daemon: Error initializing network controller: error obtaining controller instance: failed to register "bridge" driver: failed to add jump rules to ipv4 NAT table: failed to append jump rules to nat-PREROUTING:  (iptables failed: iptables --wait -t nat -A PREROUTING -m addrtype --dst-type LOCAL -j DOCKER: Warning: Extension addrtype revision 0 not supported, missing kernel module?
+Apr 24 19:52:29 Arch-Nitro dockerd[290618]: iptables v1.8.13 (nf_tables):  CHAIN_ADD failed (No such file or directory): chain PREROUTING
+Apr 24 19:52:29 Arch-Nitro dockerd[290618]:  (exit status 4))
+Apr 24 19:52:29 Arch-Nitro systemd[1]: docker.service: Main process exited, code=exited, status=1/FAILURE
+░░ Subject: Unit process exited
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ An ExecStart= process belonging to unit docker.service has exited.
+░░ 
+░░ The process' exit code is 'exited' and its exit status is 1.
+Apr 24 19:52:29 Arch-Nitro systemd[1]: docker.service: Failed with result 'exit-code'.
+░░ Subject: Unit failed
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ The unit docker.service has entered the 'failed' state with result 'exit-code'.
+Apr 24 19:52:29 Arch-Nitro systemd[1]: Failed to start Docker Application Container Engine.
+░░ Subject: A start job for unit docker.service has failed
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A start job for unit docker.service has finished with a failure.
+░░ 
+░░ The job identifier is 23127 and the job result is failed.
+Apr 24 19:52:31 Arch-Nitro systemd[1]: docker.service: Scheduled restart job, restart counter is at 2.
+░░ Subject: Automatic restarting of a unit has been scheduled
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ Automatic restarting of the unit docker.service has been scheduled, as the result for
+░░ the configured Restart= setting for the unit.
+Apr 24 19:52:31 Arch-Nitro systemd[1]: Starting Docker Application Container Engine...
+░░ Subject: A start job for unit docker.service has begun execution
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A start job for unit docker.service has begun execution.
+░░ 
+░░ The job identifier is 23258.
+Apr 24 19:52:31 Arch-Nitro dockerd[290724]: time="2026-04-24T19:52:31.608235113-07:00" level=info msg="Starting up"
+Apr 24 19:52:31 Arch-Nitro dockerd[290724]: time="2026-04-24T19:52:31.608782471-07:00" level=info msg="OTEL tracing is not configured, using no-op tracer provider"
+Apr 24 19:52:31 Arch-Nitro dockerd[290724]: time="2026-04-24T19:52:31.612431483-07:00" level=info msg="CDI directory does not exist, skipping" dir=/var/run/cdi
+Apr 24 19:52:31 Arch-Nitro dockerd[290724]: time="2026-04-24T19:52:31.623558230-07:00" level=info msg="Creating a containerd client" address=/run/containerd/containerd.sock timeout=1m0s
+Apr 24 19:52:31 Arch-Nitro dockerd[290724]: time="2026-04-24T19:52:31.627260686-07:00" level=info msg="Loading containers: start."
+Apr 24 19:52:31 Arch-Nitro dockerd[290724]: time="2026-04-24T19:52:31.629305171-07:00" level=info msg="NRI is disabled"
+Apr 24 19:52:31 Arch-Nitro dockerd[290724]: time="2026-04-24T19:52:31.629600552-07:00" level=info msg="Starting daemon with containerd snapshotter integration enabled"
+Apr 24 19:52:31 Arch-Nitro dockerd[290724]: time="2026-04-24T19:52:31.632137202-07:00" level=info msg="Restoring containers: start."
+Apr 24 19:52:31 Arch-Nitro dockerd[290724]: time="2026-04-24T19:52:31.672880449-07:00" level=info msg="Deleting nftables IPv4 rules" error="exit status 1" output="Error: Could not process rule: No such file or directory\ndelete table ip docker-bridges"
+Apr 24 19:52:31 Arch-Nitro dockerd[290724]: time="2026-04-24T19:52:31.696211730-07:00" level=info msg="Deleting nftables IPv6 rules" error="exit status 1" output="Error: Could not process rule: No such file or directory\ndelete table ip6 docker-bridges"
+Apr 24 19:52:32 Arch-Nitro dockerd[290724]: time="2026-04-24T19:52:32.197383083-07:00" level=info msg="stopping event stream following graceful shutdown" error="<nil>" module=libcontainerd namespace=moby
+Apr 24 19:52:32 Arch-Nitro dockerd[290724]: time="2026-04-24T19:52:32.197955759-07:00" level=info msg="Daemon shutdown complete" error="failed to start daemon: Error initializing network controller: error obtaining controller instance: failed to register \"bridge\" driver: failed to add jump rules to ipv4 NAT table: failed to append jump rules to nat-PREROUTING:  (iptables failed: iptables --wait -t nat -A PREROUTING -m addrtype --dst-type LOCAL -j DOCKER: Warning: Extension addrtype revision 0 not supported, missing kernel module?\niptables v1.8.13 (nf_tables):  CHAIN_ADD failed (No such file or directory): chain PREROUTING\n (exit status 4))"
+Apr 24 19:52:32 Arch-Nitro dockerd[290724]: failed to start daemon: Error initializing network controller: error obtaining controller instance: failed to register "bridge" driver: failed to add jump rules to ipv4 NAT table: failed to append jump rules to nat-PREROUTING:  (iptables failed: iptables --wait -t nat -A PREROUTING -m addrtype --dst-type LOCAL -j DOCKER: Warning: Extension addrtype revision 0 not supported, missing kernel module?
+Apr 24 19:52:32 Arch-Nitro dockerd[290724]: iptables v1.8.13 (nf_tables):  CHAIN_ADD failed (No such file or directory): chain PREROUTING
+Apr 24 19:52:32 Arch-Nitro dockerd[290724]:  (exit status 4))
+Apr 24 19:52:32 Arch-Nitro systemd[1]: docker.service: Main process exited, code=exited, status=1/FAILURE
+░░ Subject: Unit process exited
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ An ExecStart= process belonging to unit docker.service has exited.
+░░ 
+░░ The process' exit code is 'exited' and its exit status is 1.
+Apr 24 19:52:32 Arch-Nitro systemd[1]: docker.service: Failed with result 'exit-code'.
+░░ Subject: Unit failed
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ The unit docker.service has entered the 'failed' state with result 'exit-code'.
+Apr 24 19:52:32 Arch-Nitro systemd[1]: Failed to start Docker Application Container Engine.
+░░ Subject: A start job for unit docker.service has failed
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A start job for unit docker.service has finished with a failure.
+░░ 
+░░ The job identifier is 23258 and the job result is failed.
+Apr 24 19:52:34 Arch-Nitro systemd[1]: docker.service: Scheduled restart job, restart counter is at 3.
+░░ Subject: Automatic restarting of a unit has been scheduled
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ Automatic restarting of the unit docker.service has been scheduled, as the result for
+░░ the configured Restart= setting for the unit.
+Apr 24 19:52:34 Arch-Nitro systemd[1]: docker.service: Start request repeated too quickly.
+Apr 24 19:52:34 Arch-Nitro systemd[1]: docker.service: Failed with result 'start-limit-hit'.
+░░ Subject: Unit failed
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ The unit docker.service has entered the 'failed' state with result 'start-limit-hit'.
+Apr 24 19:52:34 Arch-Nitro systemd[1]: Failed to start Docker Application Container Engine.
+░░ Subject: A start job for unit docker.service has failed
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A start job for unit docker.service has finished with a failure.
+░░ 
+░░ The job identifier is 23389 and the job result is failed.
+Apr 24 19:53:10 Arch-Nitro systemd[1]: docker.service: Start request repeated too quickly.
+Apr 24 19:53:10 Arch-Nitro systemd[1]: docker.service: Failed with result 'start-limit-hit'.
+░░ Subject: Unit failed
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ The unit docker.service has entered the 'failed' state with result 'start-limit-hit'.
+Apr 24 19:53:10 Arch-Nitro systemd[1]: Failed to start Docker Application Container Engine.
+░░ Subject: A start job for unit docker.service has failed
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A start job for unit docker.service has finished with a failure.
+░░ 
+░░ The job identifier is 23644 and the job result is failed.
+Apr 24 19:53:34 Arch-Nitro systemd[1]: Starting Docker Application Container Engine...
+░░ Subject: A start job for unit docker.service has begun execution
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A start job for unit docker.service has begun execution.
+░░ 
+░░ The job identifier is 23775.
+Apr 24 19:53:35 Arch-Nitro dockerd[290893]: time="2026-04-24T19:53:35.015969808-07:00" level=info msg="Starting up"
+Apr 24 19:53:35 Arch-Nitro dockerd[290893]: time="2026-04-24T19:53:35.016618813-07:00" level=info msg="OTEL tracing is not configured, using no-op tracer provider"
+Apr 24 19:53:35 Arch-Nitro dockerd[290893]: time="2026-04-24T19:53:35.018641031-07:00" level=info msg="CDI directory does not exist, skipping" dir=/var/run/cdi
+Apr 24 19:53:35 Arch-Nitro dockerd[290893]: time="2026-04-24T19:53:35.030741035-07:00" level=info msg="Creating a containerd client" address=/run/containerd/containerd.sock timeout=1m0s
+Apr 24 19:53:35 Arch-Nitro dockerd[290893]: time="2026-04-24T19:53:35.035831462-07:00" level=info msg="Loading containers: start."
+Apr 24 19:53:35 Arch-Nitro dockerd[290893]: time="2026-04-24T19:53:35.036944639-07:00" level=info msg="NRI is disabled"
+Apr 24 19:53:35 Arch-Nitro dockerd[290893]: time="2026-04-24T19:53:35.036971332-07:00" level=info msg="Starting daemon with containerd snapshotter integration enabled"
+Apr 24 19:53:35 Arch-Nitro dockerd[290893]: time="2026-04-24T19:53:35.039496322-07:00" level=info msg="Restoring containers: start."
+Apr 24 19:53:35 Arch-Nitro dockerd[290893]: time="2026-04-24T19:53:35.076193836-07:00" level=info msg="Deleting nftables IPv4 rules" error="exit status 1" output="Error: Could not process rule: No such file or directory\ndelete table ip docker-bridges"
+Apr 24 19:53:35 Arch-Nitro dockerd[290893]: time="2026-04-24T19:53:35.139663581-07:00" level=info msg="Deleting nftables IPv6 rules" error="exit status 1" output="Error: Could not process rule: No such file or directory\ndelete table ip6 docker-bridges"
+Apr 24 19:53:35 Arch-Nitro dockerd[290893]: time="2026-04-24T19:53:35.621475018-07:00" level=info msg="stopping event stream following graceful shutdown" error="<nil>" module=libcontainerd namespace=moby
+Apr 24 19:53:35 Arch-Nitro dockerd[290893]: time="2026-04-24T19:53:35.622446716-07:00" level=info msg="Daemon shutdown complete" error="failed to start daemon: Error initializing network controller: error obtaining controller instance: failed to register \"bridge\" driver: failed to add jump rules to ipv4 NAT table: failed to append jump rules to nat-PREROUTING:  (iptables failed: iptables --wait -t nat -A PREROUTING -m addrtype --dst-type LOCAL -j DOCKER: Warning: Extension addrtype revision 0 not supported, missing kernel module?\niptables v1.8.13 (nf_tables):  CHAIN_ADD failed (No such file or directory): chain PREROUTING\n (exit status 4))"
+Apr 24 19:53:35 Arch-Nitro dockerd[290893]: failed to start daemon: Error initializing network controller: error obtaining controller instance: failed to register "bridge" driver: failed to add jump rules to ipv4 NAT table: failed to append jump rules to nat-PREROUTING:  (iptables failed: iptables --wait -t nat -A PREROUTING -m addrtype --dst-type LOCAL -j DOCKER: Warning: Extension addrtype revision 0 not supported, missing kernel module?
+Apr 24 19:53:35 Arch-Nitro dockerd[290893]: iptables v1.8.13 (nf_tables):  CHAIN_ADD failed (No such file or directory): chain PREROUTING
+Apr 24 19:53:35 Arch-Nitro dockerd[290893]:  (exit status 4))
+Apr 24 19:53:35 Arch-Nitro systemd[1]: docker.service: Main process exited, code=exited, status=1/FAILURE
+░░ Subject: Unit process exited
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ An ExecStart= process belonging to unit docker.service has exited.
+░░ 
+░░ The process' exit code is 'exited' and its exit status is 1.
+Apr 24 19:53:35 Arch-Nitro systemd[1]: docker.service: Failed with result 'exit-code'.
+░░ Subject: Unit failed
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ The unit docker.service has entered the 'failed' state with result 'exit-code'.
+Apr 24 19:53:35 Arch-Nitro systemd[1]: Failed to start Docker Application Container Engine.
+░░ Subject: A start job for unit docker.service has failed
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A start job for unit docker.service has finished with a failure.
+░░ 
+░░ The job identifier is 23775 and the job result is failed.
+Apr 24 19:53:37 Arch-Nitro systemd[1]: docker.service: Scheduled restart job, restart counter is at 1.
+░░ Subject: Automatic restarting of a unit has been scheduled
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ Automatic restarting of the unit docker.service has been scheduled, as the result for
+░░ the configured Restart= setting for the unit.
+Apr 24 19:53:37 Arch-Nitro systemd[1]: Starting Docker Application Container Engine...
+░░ Subject: A start job for unit docker.service has begun execution
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A start job for unit docker.service has begun execution.
+░░ 
+░░ The job identifier is 23906.
+Apr 24 19:53:37 Arch-Nitro dockerd[290999]: time="2026-04-24T19:53:37.880510809-07:00" level=info msg="Starting up"
+Apr 24 19:53:37 Arch-Nitro dockerd[290999]: time="2026-04-24T19:53:37.880947692-07:00" level=info msg="OTEL tracing is not configured, using no-op tracer provider"
+Apr 24 19:53:37 Arch-Nitro dockerd[290999]: time="2026-04-24T19:53:37.883433459-07:00" level=info msg="CDI directory does not exist, skipping" dir=/var/run/cdi
+Apr 24 19:53:37 Arch-Nitro dockerd[290999]: time="2026-04-24T19:53:37.892162242-07:00" level=info msg="Creating a containerd client" address=/run/containerd/containerd.sock timeout=1m0s
+Apr 24 19:53:37 Arch-Nitro dockerd[290999]: time="2026-04-24T19:53:37.895681671-07:00" level=info msg="Loading containers: start."
+Apr 24 19:53:37 Arch-Nitro dockerd[290999]: time="2026-04-24T19:53:37.896646981-07:00" level=info msg="NRI is disabled"
+Apr 24 19:53:37 Arch-Nitro dockerd[290999]: time="2026-04-24T19:53:37.896657364-07:00" level=info msg="Starting daemon with containerd snapshotter integration enabled"
+Apr 24 19:53:37 Arch-Nitro dockerd[290999]: time="2026-04-24T19:53:37.898679678-07:00" level=info msg="Restoring containers: start."
+Apr 24 19:53:37 Arch-Nitro dockerd[290999]: time="2026-04-24T19:53:37.946129809-07:00" level=info msg="Deleting nftables IPv4 rules" error="exit status 1" output="Error: Could not process rule: No such file or directory\ndelete table ip docker-bridges"
+Apr 24 19:53:37 Arch-Nitro dockerd[290999]: time="2026-04-24T19:53:37.976186497-07:00" level=info msg="Deleting nftables IPv6 rules" error="exit status 1" output="Error: Could not process rule: No such file or directory\ndelete table ip6 docker-bridges"
+Apr 24 19:53:38 Arch-Nitro dockerd[290999]: time="2026-04-24T19:53:38.360171887-07:00" level=info msg="stopping event stream following graceful shutdown" error="<nil>" module=libcontainerd namespace=moby
+Apr 24 19:53:38 Arch-Nitro dockerd[290999]: time="2026-04-24T19:53:38.360833154-07:00" level=info msg="Daemon shutdown complete" error="failed to start daemon: Error initializing network controller: error obtaining controller instance: failed to register \"bridge\" driver: failed to add jump rules to ipv4 NAT table: failed to append jump rules to nat-PREROUTING:  (iptables failed: iptables --wait -t nat -A PREROUTING -m addrtype --dst-type LOCAL -j DOCKER: Warning: Extension addrtype revision 0 not supported, missing kernel module?\niptables v1.8.13 (nf_tables):  CHAIN_ADD failed (No such file or directory): chain PREROUTING\n (exit status 4))"
+Apr 24 19:53:38 Arch-Nitro dockerd[290999]: failed to start daemon: Error initializing network controller: error obtaining controller instance: failed to register "bridge" driver: failed to add jump rules to ipv4 NAT table: failed to append jump rules to nat-PREROUTING:  (iptables failed: iptables --wait -t nat -A PREROUTING -m addrtype --dst-type LOCAL -j DOCKER: Warning: Extension addrtype revision 0 not supported, missing kernel module?
+Apr 24 19:53:38 Arch-Nitro dockerd[290999]: iptables v1.8.13 (nf_tables):  CHAIN_ADD failed (No such file or directory): chain PREROUTING
+Apr 24 19:53:38 Arch-Nitro dockerd[290999]:  (exit status 4))
+Apr 24 19:53:38 Arch-Nitro systemd[1]: docker.service: Main process exited, code=exited, status=1/FAILURE
+░░ Subject: Unit process exited
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ An ExecStart= process belonging to unit docker.service has exited.
+░░ 
+░░ The process' exit code is 'exited' and its exit status is 1.
+Apr 24 19:53:38 Arch-Nitro systemd[1]: docker.service: Failed with result 'exit-code'.
+░░ Subject: Unit failed
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ The unit docker.service has entered the 'failed' state with result 'exit-code'.
+Apr 24 19:53:38 Arch-Nitro systemd[1]: Failed to start Docker Application Container Engine.
+░░ Subject: A start job for unit docker.service has failed
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A start job for unit docker.service has finished with a failure.
+░░ 
+░░ The job identifier is 23906 and the job result is failed.
+Apr 24 19:53:40 Arch-Nitro systemd[1]: docker.service: Scheduled restart job, restart counter is at 2.
+░░ Subject: Automatic restarting of a unit has been scheduled
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ Automatic restarting of the unit docker.service has been scheduled, as the result for
+░░ the configured Restart= setting for the unit.
+Apr 24 19:53:40 Arch-Nitro systemd[1]: Starting Docker Application Container Engine...
+░░ Subject: A start job for unit docker.service has begun execution
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A start job for unit docker.service has begun execution.
+░░ 
+░░ The job identifier is 24037.
+Apr 24 19:53:40 Arch-Nitro dockerd[291103]: time="2026-04-24T19:53:40.636605353-07:00" level=info msg="Starting up"
+Apr 24 19:53:40 Arch-Nitro dockerd[291103]: time="2026-04-24T19:53:40.637087675-07:00" level=info msg="OTEL tracing is not configured, using no-op tracer provider"
+Apr 24 19:53:40 Arch-Nitro dockerd[291103]: time="2026-04-24T19:53:40.639565024-07:00" level=info msg="CDI directory does not exist, skipping" dir=/var/run/cdi
+Apr 24 19:53:40 Arch-Nitro dockerd[291103]: time="2026-04-24T19:53:40.650171411-07:00" level=info msg="Creating a containerd client" address=/run/containerd/containerd.sock timeout=1m0s
+Apr 24 19:53:40 Arch-Nitro dockerd[291103]: time="2026-04-24T19:53:40.654644742-07:00" level=info msg="Loading containers: start."
+Apr 24 19:53:40 Arch-Nitro dockerd[291103]: time="2026-04-24T19:53:40.655890980-07:00" level=info msg="NRI is disabled"
+Apr 24 19:53:40 Arch-Nitro dockerd[291103]: time="2026-04-24T19:53:40.655914186-07:00" level=info msg="Starting daemon with containerd snapshotter integration enabled"
+Apr 24 19:53:40 Arch-Nitro dockerd[291103]: time="2026-04-24T19:53:40.658771347-07:00" level=info msg="Restoring containers: start."
+Apr 24 19:53:40 Arch-Nitro dockerd[291103]: time="2026-04-24T19:53:40.716437307-07:00" level=info msg="Deleting nftables IPv4 rules" error="exit status 1" output="Error: Could not process rule: No such file or directory\ndelete table ip docker-bridges"
+Apr 24 19:53:40 Arch-Nitro dockerd[291103]: time="2026-04-24T19:53:40.759836755-07:00" level=info msg="Deleting nftables IPv6 rules" error="exit status 1" output="Error: Could not process rule: No such file or directory\ndelete table ip6 docker-bridges"
+Apr 24 19:53:41 Arch-Nitro dockerd[291103]: time="2026-04-24T19:53:41.142080765-07:00" level=info msg="stopping event stream following graceful shutdown" error="<nil>" module=libcontainerd namespace=moby
+Apr 24 19:53:41 Arch-Nitro dockerd[291103]: time="2026-04-24T19:53:41.142822158-07:00" level=info msg="Daemon shutdown complete" error="failed to start daemon: Error initializing network controller: error obtaining controller instance: failed to register \"bridge\" driver: failed to add jump rules to ipv4 NAT table: failed to append jump rules to nat-PREROUTING:  (iptables failed: iptables --wait -t nat -A PREROUTING -m addrtype --dst-type LOCAL -j DOCKER: Warning: Extension addrtype revision 0 not supported, missing kernel module?\niptables v1.8.13 (nf_tables):  CHAIN_ADD failed (No such file or directory): chain PREROUTING\n (exit status 4))"
+Apr 24 19:53:41 Arch-Nitro dockerd[291103]: failed to start daemon: Error initializing network controller: error obtaining controller instance: failed to register "bridge" driver: failed to add jump rules to ipv4 NAT table: failed to append jump rules to nat-PREROUTING:  (iptables failed: iptables --wait -t nat -A PREROUTING -m addrtype --dst-type LOCAL -j DOCKER: Warning: Extension addrtype revision 0 not supported, missing kernel module?
+Apr 24 19:53:41 Arch-Nitro dockerd[291103]: iptables v1.8.13 (nf_tables):  CHAIN_ADD failed (No such file or directory): chain PREROUTING
+Apr 24 19:53:41 Arch-Nitro dockerd[291103]:  (exit status 4))
+Apr 24 19:53:41 Arch-Nitro systemd[1]: docker.service: Main process exited, code=exited, status=1/FAILURE
+░░ Subject: Unit process exited
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ An ExecStart= process belonging to unit docker.service has exited.
+░░ 
+░░ The process' exit code is 'exited' and its exit status is 1.
+Apr 24 19:53:41 Arch-Nitro systemd[1]: docker.service: Failed with result 'exit-code'.
+░░ Subject: Unit failed
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ The unit docker.service has entered the 'failed' state with result 'exit-code'.
+Apr 24 19:53:41 Arch-Nitro systemd[1]: Failed to start Docker Application Container Engine.
+░░ Subject: A start job for unit docker.service has failed
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A start job for unit docker.service has finished with a failure.
+░░ 
+░░ The job identifier is 24037 and the job result is failed.
+Apr 24 19:53:43 Arch-Nitro systemd[1]: docker.service: Scheduled restart job, restart counter is at 3.
+░░ Subject: Automatic restarting of a unit has been scheduled
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ Automatic restarting of the unit docker.service has been scheduled, as the result for
+░░ the configured Restart= setting for the unit.
+Apr 24 19:53:43 Arch-Nitro systemd[1]: docker.service: Start request repeated too quickly.
+Apr 24 19:53:43 Arch-Nitro systemd[1]: docker.service: Failed with result 'start-limit-hit'.
+░░ Subject: Unit failed
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ The unit docker.service has entered the 'failed' state with result 'start-limit-hit'.
+Apr 24 19:53:43 Arch-Nitro systemd[1]: Failed to start Docker Application Container Engine.
+░░ Subject: A start job for unit docker.service has failed
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A start job for unit docker.service has finished with a failure.
+░░ 
+░░ The job identifier is 24168 and the job result is failed.

@@ -3,10 +3,14 @@
 //! The module intentionally keeps payloads small and deterministic so they can be
 //! used both by Renet messages and offline/state-capture tooling.
 
+use std::io;
+
 use serde::{Deserialize, Serialize};
 
 use crate::components::Transform;
-use crate::multiplayer::matchmaking::{CtfSlot, CtfSlotAssignment, GameMode, MapSize};
+use crate::multiplayer::matchmaking::{
+    CtfSlot, CtfSlotAssignment, GameMode, MapSize, RelayConnectInfo,
+};
 
 /// A transport-agnostic network tick index.
 pub type NetworkTick = u32;
@@ -18,6 +22,9 @@ pub type NetworkEntityId = (u32, u32);
 pub const NET_CHANNEL_INPUT: u8 = 0;
 pub const NET_CHANNEL_CONTROL: u8 = 1;
 pub const NET_CHANNEL_CORRECTION: u8 = 2;
+
+/// Wire protocol version for relay packets.
+pub const RELAY_PROTOCOL_VERSION: u16 = 1;
 
 /// Default tick-rate used by host/client sessions.
 pub const DEFAULT_TICK_RATE: u32 = 60;
@@ -160,6 +167,49 @@ pub enum NetMessage {
     },
 }
 
+/// Packet sent by a game client to the matchmaker relay.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RelayClientPacket {
+    /// Bind this UDP source address to the authenticated match player.
+    Register {
+        protocol_version: u16,
+        match_id: String,
+        client_id: u64,
+        session_token: String,
+    },
+    /// Relay one gameplay message to the other clients in the match.
+    Payload {
+        protocol_version: u16,
+        match_id: String,
+        client_id: u64,
+        session_token: String,
+        sequence: u64,
+        message: NetMessage,
+    },
+    /// Keep the relay binding alive through NATs and firewalls.
+    Heartbeat {
+        protocol_version: u16,
+        match_id: String,
+        client_id: u64,
+        session_token: String,
+    },
+}
+
+/// Packet sent by the matchmaker relay to a game client.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RelayServerPacket {
+    /// Registration acknowledgement.
+    Registered { match_id: String, client_id: u64 },
+    /// Gameplay message from another client in the same match.
+    Payload {
+        from_client_id: u64,
+        sequence: u64,
+        message: NetMessage,
+    },
+    /// Relay-level error. Gameplay messages are never interpreted as authority.
+    Error { message: String },
+}
+
 /// Internal sync policy consumed by multiplayer sessions.
 #[derive(Debug, Clone)]
 pub enum SyncMode {
@@ -213,6 +263,8 @@ pub struct MatchState {
     pub shared_seed: u64,
     /// Ordered player list.
     pub players: Vec<crate::multiplayer::matchmaking::PlayerInfo>,
+    /// Relay endpoint and token assigned to the local player.
+    pub relay: RelayConnectInfo,
     /// Host tick at which authoritative game state starts.
     pub start_tick: NetworkTick,
     /// Selected game mode for this match.
@@ -221,6 +273,14 @@ pub struct MatchState {
     pub map_size: MapSize,
     /// Host-selected CTF slot assignments. Empty for non-CTF matches.
     pub ctf_assignments: Vec<CtfSlotAssignment>,
+}
+
+pub fn serialize_relay_packet<T: Serialize>(message: &T) -> io::Result<Vec<u8>> {
+    bincode::serialize(message).map_err(io::Error::other)
+}
+
+pub fn deserialize_relay_packet<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> io::Result<T> {
+    bincode::deserialize(bytes).map_err(io::Error::other)
 }
 
 /// Input frame alias kept for API stability with plan documentation.

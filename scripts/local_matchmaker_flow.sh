@@ -18,7 +18,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     -h|--help)
       cat <<'USAGE'
-Usage: scripts/local_matchmaker_flow.sh [-n N] [MATCHMAKER_ADDR] [HOST_GAME_ADDR] [CLIENT_GAME_ADDR] [HOST_NAME] [CLIENT_NAME] [RUN_SECONDS]
+Usage: scripts/local_matchmaker_flow.sh [-n N] [MATCHMAKER_ADDR] [HOST_NAME] [CLIENT_NAME] [RUN_SECONDS]
 
 Options:
   -n, --num-players N    Number of game instances to launch (default: 2)
@@ -27,14 +27,12 @@ Options:
 Positionals (all optional):
   MATCHMAKER_ADDR      Matchmaker address that clients connect to (default: 127.0.0.1:7000)
                        For a remote matchmaker, pass the server IP:port here, e.g. 203.0.113.5:7000
-  HOST_GAME_ADDR       Host game addr (default: 127.0.0.1:7101)
-  CLIENT_GAME_ADDR     Base client game addr; extra clients increment port (default: 127.0.0.1:7102)
   HOST_NAME            Host player name (default: Player-One)
   CLIENT_NAME          First client name (default: Player-Two); extra clients add numeric suffixes
   RUN_SECONDS          Runtime before auto-stop, 0 means run until Ctrl+C (default: 0)
 
 Remote matchmaker deployment:
-  On the server: MATCHMAKER_BIND=0.0.0.0:7000 cargo run --bin matchmaker
+  On the server: MATCHMAKER_BIND=0.0.0.0:7000 RELAY_BIND=0.0.0.0:7001 RELAY_ADVERTISE=<server-ip>:7001 cargo run --bin matchmaker
   On clients:    MATCHMAKER_ADDR=<server-ip>:7000 cargo run --bin game
   Via this script: ./scripts/local_matchmaker_flow.sh <server-ip>:7000
 USAGE
@@ -53,18 +51,9 @@ if ! [[ "$PLAYER_COUNT" =~ ^[1-9][0-9]*$ ]]; then
 fi
 
 MATCHMAKER_ADDR="${POSITIONAL_ARGS[0]:-127.0.0.1:7000}"
-HOST_GAME_ADDR="${POSITIONAL_ARGS[1]:-127.0.0.1:7101}"
-CLIENT_GAME_ADDR="${POSITIONAL_ARGS[2]:-127.0.0.1:7102}"
-HOST_NAME="${POSITIONAL_ARGS[3]:-Player-One}"
-CLIENT_NAME="${POSITIONAL_ARGS[4]:-Player-Two}"
-RUN_SECONDS="${POSITIONAL_ARGS[5]:-0}"
-
-CLIENT_HOST="${CLIENT_GAME_ADDR%:*}"
-CLIENT_BASE_PORT="${CLIENT_GAME_ADDR##*:}"
-if [[ "$CLIENT_HOST" == "$CLIENT_GAME_ADDR" ]] || ! [[ "$CLIENT_BASE_PORT" =~ ^[0-9]+$ ]]; then
-  echo "CLIENT_GAME_ADDR must be host:port, got '$CLIENT_GAME_ADDR'"
-  exit 1
-fi
+HOST_NAME="${POSITIONAL_ARGS[1]:-Player-One}"
+CLIENT_NAME="${POSITIONAL_ARGS[2]:-Player-Two}"
+RUN_SECONDS="${POSITIONAL_ARGS[3]:-0}"
 
 HOST_LOG="$ROOT_DIR/logs/matchmaker-host.log"
 MATCHMAKER_LOG="$ROOT_DIR/logs/matchmaker-server.log"
@@ -165,7 +154,7 @@ MATCHMAKER_PID=$!
 sleep 1
 
 echo "[2/5] starting host runtime"
-(run_game host "$HOST_NAME" "$HOST_GAME_ADDR" >"$HOST_LOG" 2>&1) &
+(run_game host "$HOST_NAME" >"$HOST_LOG" 2>&1) &
 HOST_PID=$!
 
 echo "[3/5] waiting for lobby code"
@@ -183,8 +172,6 @@ echo "host_client_id=$HOST_ID, lobby_code=$LOBBY_CODE"
 if (( PLAYER_COUNT > 1 )); then
   echo "[4/5] starting $((PLAYER_COUNT - 1)) client runtime(s) for lobby $LOBBY_CODE"
   for (( i=1; i<PLAYER_COUNT; i++ )); do
-    client_port=$((CLIENT_BASE_PORT + i - 1))
-    client_addr="$CLIENT_HOST:$client_port"
     if (( i == 1 )); then
       client_name="$CLIENT_NAME"
     else
@@ -193,12 +180,12 @@ if (( PLAYER_COUNT > 1 )); then
     client_log="$ROOT_DIR/logs/matchmaker-client-$((i + 1)).log"
     : >"$client_log"
 
-    (run_game join "$LOBBY_CODE" "$client_name" "$client_addr" >"$client_log" 2>&1) &
+    (run_game join "$LOBBY_CODE" "$client_name" >"$client_log" 2>&1) &
     client_pid=$!
 
     CLIENT_PIDS+=("$client_pid")
     CLIENT_LOGS+=("$client_log")
-    echo "  started client $((i + 1)): name=$client_name addr=$client_addr log=$client_log"
+    echo "  started client $((i + 1)): name=$client_name log=$client_log"
   done
 else
   echo "[4/5] launching host only (--players=1)"

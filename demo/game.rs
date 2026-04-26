@@ -16,8 +16,9 @@ use std::time::{Duration, Instant};
 use clap::{Parser, Subcommand};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
-use winit::event::{MouseScrollDelta, StartCause, WindowEvent};
+use winit::event::{ElementState, MouseScrollDelta, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::keyboard::KeyLocation;
 use winit::window::{Window, WindowAttributes, WindowId};
 
 use forge_ecs::app::AppCore;
@@ -875,9 +876,34 @@ impl ApplicationHandler for GameApp {
             return;
         }
 
-        s.core
-            .imgui
-            .handle_window_event(s.core.platform.window(), window_id, &event);
+        // When NumLock is on, winit reports numpad digits as text and
+        // imgui-winit-support also maps the same key to navigation. Feed only
+        // the text so launcher fields do not move the cursor while typing.
+        let is_launcher_numpad_text = s.launcher.is_some()
+            && matches!(
+                &event,
+                WindowEvent::KeyboardInput { event: key_event, .. }
+                    if key_event.location == KeyLocation::Numpad
+                        && key_event.text.is_some()
+                        && key_event.state == ElementState::Pressed
+            );
+
+        if is_launcher_numpad_text {
+            if let WindowEvent::KeyboardInput {
+                event: key_event, ..
+            } = &event
+            {
+                if let Some(text) = &key_event.text {
+                    for ch in text.chars() {
+                        s.core.imgui.add_input_character(ch);
+                    }
+                }
+            }
+        } else {
+            s.core
+                .imgui
+                .handle_window_event(s.core.platform.window(), window_id, &event);
+        }
 
         match &event {
             WindowEvent::CloseRequested => event_loop.exit(),

@@ -23,7 +23,10 @@ impl System for WinConditionSystem {
         let Some(refs) = world.resource::<EntityRefs>().cloned() else {
             return;
         };
-        let carrier = world.resource::<CarrierState>().copied().unwrap_or_default();
+        let carrier = world
+            .resource::<CarrierState>()
+            .copied()
+            .unwrap_or_default();
         let midline_x = world
             .resource::<MapSize>()
             .map(|ms| ms.midline_x())
@@ -32,6 +35,9 @@ impl System for WinConditionSystem {
         let winner = carrier
             .blue_flag_carrier
             .and_then(|slot| {
+                if !slot.is_red() {
+                    return None;
+                }
                 world
                     .get::<Transform>(refs.player(slot))
                     .filter(|tf| tf.position.x < midline_x)
@@ -39,6 +45,9 @@ impl System for WinConditionSystem {
             })
             .or_else(|| {
                 carrier.red_flag_carrier.and_then(|slot| {
+                    if slot.is_red() {
+                        return None;
+                    }
                     world
                         .get::<Transform>(refs.player(slot))
                         .filter(|tf| tf.position.x > midline_x)
@@ -50,7 +59,7 @@ impl System for WinConditionSystem {
             commands.insert_resource(GameState {
                 phase: GamePhase::Won(id),
             });
-            commands.insert_resource(CtfSyncState { dirty: true });
+            commands.insert_resource(CtfSyncState::dirty());
         }
     }
 }

@@ -3,11 +3,11 @@
 use crate::components::{Camera, Shape, Tag, Transform, Velocity};
 use crate::ecs::entity::Entity;
 use crate::ecs::world::World;
-use crate::game::ctf::components::{Flag, PlayerMarker, Wall};
+use crate::game::ctf::components::{Flag, PlayerMarker, TeamRestrictedZone, Wall};
 use crate::game::ctf::nav::build_navigation_grid;
 use crate::game::ctf::resources::{
-    AutoMoveState, CarrierState, ControlState, CtfInputState, CtfPointerState, CtfSyncState,
-    CtfRestartState, EntityRefs, FlagMotionState, GameState, PlayerControl,
+    AutoMoveState, CarrierState, ControlState, CtfInputState, CtfPointerState, CtfRestartState,
+    CtfSyncState, EntityRefs, FlagMotionState, GameState, PlayerControl,
 };
 use crate::multiplayer::matchmaking::{CtfSlot, CtfSlotAssignment, MapSize};
 
@@ -36,6 +36,7 @@ pub fn setup_ctf_scene_entities(
     }
 
     attach_wall_components(world);
+    attach_team_restricted_zones(world);
     require_saved_camera(world);
 
     let refs = EntityRefs {
@@ -106,6 +107,30 @@ fn build_control_state(assignments: &[CtfSlotAssignment]) -> ControlState {
     ControlState { controls }
 }
 
+fn attach_team_restricted_zones(world: &mut World) {
+    let zone_entities: Vec<(Entity, u8)> = world
+        .query::<Tag>()
+        .filter_map(|(entity, tag)| match tag.as_str() {
+            "ctf_restricted_red_zone" => Some((entity, 1)),
+            "ctf_restricted_blue_zone" => Some((entity, 2)),
+            _ => None,
+        })
+        .collect();
+
+    for (entity, team_id) in zone_entities {
+        if let Some(Shape::Rect { width, height }) = world.get::<Shape>(entity).cloned() {
+            world.insert(
+                entity,
+                TeamRestrictedZone {
+                    team_id,
+                    w: width * 0.5,
+                    h: height * 0.5,
+                },
+            );
+        }
+    }
+}
+
 fn attach_wall_components(world: &mut World) {
     let wall_entities: Vec<Entity> = world
         .query::<Tag>()
@@ -129,14 +154,7 @@ fn attach_wall_components(world: &mut World) {
 fn wall_rects(world: &World) -> Vec<(f32, f32, f32, f32)> {
     world
         .query2::<Transform, Wall>()
-        .map(|(_, transform, wall)| {
-            (
-                transform.position.x,
-                transform.position.y,
-                wall.w,
-                wall.h,
-            )
-        })
+        .map(|(_, transform, wall)| (transform.position.x, transform.position.y, wall.w, wall.h))
         .collect()
 }
 

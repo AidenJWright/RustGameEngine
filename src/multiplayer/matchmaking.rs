@@ -143,6 +143,29 @@ impl CtfSlot {
         }
     }
 
+    pub fn team_number(self) -> u8 {
+        match self {
+            Self::Red1 | Self::Blue1 => 1,
+            Self::Red2 | Self::Blue2 => 2,
+            Self::Red3 | Self::Blue3 => 3,
+            Self::Red4 | Self::Blue4 => 4,
+        }
+    }
+
+    pub fn from_team_number(is_red: bool, number: u8) -> Option<Self> {
+        match (is_red, number) {
+            (true, 1) => Some(Self::Red1),
+            (true, 2) => Some(Self::Red2),
+            (true, 3) => Some(Self::Red3),
+            (true, 4) => Some(Self::Red4),
+            (false, 1) => Some(Self::Blue1),
+            (false, 2) => Some(Self::Blue2),
+            (false, 3) => Some(Self::Blue3),
+            (false, 4) => Some(Self::Blue4),
+            _ => None,
+        }
+    }
+
     pub fn is_red(self) -> bool {
         matches!(self, Self::Red1 | Self::Red2 | Self::Red3 | Self::Red4)
     }

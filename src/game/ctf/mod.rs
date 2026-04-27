@@ -46,9 +46,13 @@ pub const P2_TAG_KEY: u32 = 9;
 pub const SWITCH_KEY: u32 = 10;
 /// Raw `KeysPressed` discriminant for R.
 pub const RESTART_KEY: u32 = 11;
-/// `InputFrame::action_bits` flag for tagging.
+/// Raw `KeysPressed` discriminants for selecting CTF slots 1 through 4.
+pub const SLOT_SELECT_KEYS: [u32; 4] = [12, 13, 14, 15];
+/// `InputFrame::action_bits` flag for throwing a carried flag.
 pub const ACTION_TAG: u8 = 0b0000_0001;
 /// `InputFrame::action_bits` flag for teammate slot switching.
 pub const ACTION_SWITCH: u8 = 0b0000_0010;
 /// `InputFrame::action_bits` flag for restarting the CTF match.
 pub const ACTION_RESTART: u8 = 0b0000_0100;
+/// `InputFrame::action_bits` flags for selecting CTF slots 1 through 4.
+pub const ACTION_SELECT_SLOTS: [u8; 4] = [0b0000_1000, 0b0001_0000, 0b0010_0000, 0b0100_0000];

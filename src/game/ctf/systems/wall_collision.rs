@@ -4,7 +4,7 @@ use crate::components::Transform;
 use crate::ecs::command_buffer::CommandBuffer;
 use crate::ecs::system::System;
 use crate::ecs::world::World;
-use crate::game::ctf::components::{PlayerMarker, Wall};
+use crate::game::ctf::components::{PlayerMarker, TeamRestrictedZone, Wall};
 use crate::game::ctf::PLAYER_RADIUS;
 use crate::math::Vec3;
 
@@ -17,25 +17,43 @@ impl System for WallCollisionSystem {
         let walls: Vec<(f32, f32, f32, f32)> = world
             .query2::<Transform, Wall>()
             .map(|(_, transform, wall)| {
-                (
-                    transform.position.x,
-                    transform.position.y,
-                    wall.w,
-                    wall.h,
-                )
+                (transform.position.x, transform.position.y, wall.w, wall.h)
             })
             .collect();
 
-        if walls.is_empty() {
+        let restricted_zones = team_restricted_zones(world);
+        if walls.is_empty() && restricted_zones.is_empty() {
             return;
         }
 
-        for (entity, transform, _marker) in world.query2::<Transform, PlayerMarker>() {
+        for (entity, transform, marker) in world.query2::<Transform, PlayerMarker>() {
             let mut x = transform.position.x;
             let mut y = transform.position.y;
 
             for (wall_x, wall_y, half_w, half_h) in &walls {
-                resolve_circle_aabb(&mut x, &mut y, PLAYER_RADIUS, *wall_x, *wall_y, *half_w, *half_h);
+                resolve_circle_aabb(
+                    &mut x,
+                    &mut y,
+                    PLAYER_RADIUS,
+                    *wall_x,
+                    *wall_y,
+                    *half_w,
+                    *half_h,
+                );
+            }
+
+            for (team_id, zone_x, zone_y, half_w, half_h) in &restricted_zones {
+                if marker.slot.team_id() == *team_id {
+                    resolve_circle_aabb(
+                        &mut x,
+                        &mut y,
+                        PLAYER_RADIUS,
+                        *zone_x,
+                        *zone_y,
+                        *half_w,
+                        *half_h,
+                    );
+                }
             }
 
             if (x - transform.position.x).abs() > f32::EPSILON
@@ -47,6 +65,21 @@ impl System for WallCollisionSystem {
             }
         }
     }
+}
+
+fn team_restricted_zones(world: &World) -> Vec<(u8, f32, f32, f32, f32)> {
+    world
+        .query2::<Transform, TeamRestrictedZone>()
+        .map(|(_, transform, zone)| {
+            (
+                zone.team_id,
+                transform.position.x,
+                transform.position.y,
+                zone.w,
+                zone.h,
+            )
+        })
+        .collect()
 }
 
 fn resolve_circle_aabb(

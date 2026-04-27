@@ -17,16 +17,18 @@ use forge_ecs::app::AppCore;
 use forge_ecs::components::{Color, Shape, Transform};
 use forge_ecs::ecs::resource::{DeltaTime, ElapsedTime, KeysPressed};
 use forge_ecs::ecs::world::World;
-use forge_ecs::game::ctf::resources::{CtfInputState, CtfPointerState, CtfRestartState};
+use forge_ecs::game::ctf::resources::{
+    CtfInputState, CtfPointerState, CtfRestartState, EntityRefs,
+};
 use forge_ecs::game::ctf::setup::setup_ctf_scene_entities;
-use forge_ecs::game::ctf::systems::hud::draw_hud;
+use forge_ecs::game::ctf::systems::hud::{draw_hud, draw_player_numbers};
 use forge_ecs::game::ctf::systems::{
     AutoMoveSystem, CtfInputSystem, FlagCarrySystem, FlagMotionSystem, FlagPickupSystem,
-    StopOnWinSystem, WallCollisionSystem, WinConditionSystem,
+    StopOnWinSystem, TaggingSystem, WallCollisionSystem, WinConditionSystem,
 };
 use forge_ecs::game::ctf::{
-    ACTION_RESTART, ACTION_SWITCH, ACTION_TAG, ARENA_HEIGHT, ARENA_WIDTH, RESTART_KEY,
-    SWITCH_KEY,
+    ACTION_RESTART, ACTION_SELECT_SLOTS, ACTION_SWITCH, ACTION_TAG, ARENA_HEIGHT, ARENA_WIDTH,
+    RESTART_KEY, SLOT_SELECT_KEYS, SWITCH_KEY,
 };
 use forge_ecs::messaging::{LoopPhase, MessageBus};
 use forge_ecs::multiplayer::matchmaking::{CtfSlot, CtfSlotAssignment, MapSize};
@@ -106,11 +108,10 @@ impl ApplicationHandler for CtfApp {
             return;
         }
 
-        state.core.imgui.handle_window_event(
-            state.core.platform.window(),
-            window_id,
-            &event,
-        );
+        state
+            .core
+            .imgui
+            .handle_window_event(state.core.platform.window(), window_id, &event);
 
         match &event {
             WindowEvent::CloseRequested => event_loop.exit(),
@@ -120,6 +121,11 @@ impl ApplicationHandler for CtfApp {
             WindowEvent::ScaleFactorChanged { .. } => {
                 let size = state.core.platform.window.inner_size();
                 state.core.render_ctx.resize(size.width, size.height);
+            }
+            WindowEvent::Focused(false) => {
+                if let Some(keys) = state.core.world.resource_mut::<KeysPressed>() {
+                    keys.clear();
+                }
             }
             WindowEvent::RedrawRequested => render(state),
             _ => {}
@@ -202,7 +208,8 @@ fn build_bus() -> MessageBus {
     bus.register(LoopPhase::Update, MovementSystem::PRIORITY, MovementSystem);
     bus.register(LoopPhase::Update, 2, WallCollisionSystem);
     bus.register(LoopPhase::Update, 4, FlagMotionSystem);
-    bus.register(LoopPhase::Update, 5, FlagPickupSystem);
+    bus.register(LoopPhase::Update, 5, TaggingSystem);
+    bus.register(LoopPhase::Update, 6, FlagPickupSystem);
     bus.register(LoopPhase::Update, 10, FlagCarrySystem);
     bus.register(LoopPhase::Update, 20, WinConditionSystem);
     bus
@@ -239,17 +246,27 @@ fn queue_local_debug_inputs(world: &mut World) {
     let red_move_y = axis(&keys, 4, 6);
     let blue_move_x = axis(&keys, 0, 1);
     let blue_move_y = axis(&keys, 2, 3);
-    let switch = keys.is_held(SWITCH_KEY);
-    let restart = keys.is_held(RESTART_KEY);
+    let (red_tag, blue_tag, switch, restart, slot_select) = world
+        .resource_mut::<KeysPressed>()
+        .map_or((false, false, false, false, 0), |keys| {
+            (
+                keys.consume_pressed(8),
+                keys.consume_pressed(9),
+                keys.consume_pressed(SWITCH_KEY),
+                keys.consume_pressed(RESTART_KEY),
+                slot_select_action_bits(keys),
+            )
+        });
 
     frames.push(InputFrame {
         tick: 0,
         player_id: 1,
         move_x: red_move_x,
         move_y: red_move_y,
-        action_bits: (if keys.is_held(8) { ACTION_TAG } else { 0 })
+        action_bits: (if red_tag { ACTION_TAG } else { 0 })
             | (if switch { ACTION_SWITCH } else { 0 })
-            | (if restart { ACTION_RESTART } else { 0 }),
+            | (if restart { ACTION_RESTART } else { 0 })
+            | slot_select,
         ctf_pointer: pointer_input,
         ctf_restart: ctf_restart_input(world, restart),
         ctf_auto_move: None,
@@ -260,9 +277,10 @@ fn queue_local_debug_inputs(world: &mut World) {
         player_id: 2,
         move_x: blue_move_x,
         move_y: blue_move_y,
-        action_bits: (if keys.is_held(9) { ACTION_TAG } else { 0 })
+        action_bits: (if blue_tag { ACTION_TAG } else { 0 })
             | (if switch { ACTION_SWITCH } else { 0 })
-            | (if restart { ACTION_RESTART } else { 0 }),
+            | (if restart { ACTION_RESTART } else { 0 })
+            | slot_select,
         ctf_pointer: pointer_input.map(|pointer| CtfPointerInput {
             aim_world: pointer.aim_world,
             click_world: None,
@@ -272,6 +290,19 @@ fn queue_local_debug_inputs(world: &mut World) {
         ctf_flag_throw: None,
     });
     world.insert_resource(CtfInputState { frames });
+}
+
+fn slot_select_action_bits(keys: &mut KeysPressed) -> u8 {
+    SLOT_SELECT_KEYS
+        .iter()
+        .zip(ACTION_SELECT_SLOTS)
+        .fold(0, |bits, (key, action)| {
+            bits | if keys.consume_pressed(*key) {
+                action
+            } else {
+                0
+            }
+        })
 }
 
 fn ctf_restart_input(world: &World, restart: bool) -> Option<CtfRestartInput> {
@@ -312,6 +343,10 @@ fn key_discriminant(code: KeyCode) -> Option<u32> {
         KeyCode::Return => Some(9),
         KeyCode::LeftShift => Some(10),
         KeyCode::R => Some(11),
+        KeyCode::Digit1 => Some(12),
+        KeyCode::Digit2 => Some(13),
+        KeyCode::Digit3 => Some(14),
+        KeyCode::Digit4 => Some(15),
         _ => None,
     }
 }
@@ -363,6 +398,8 @@ fn render(state: &mut CtfState) {
         let ui = state.core.imgui.begin_frame(state.core.platform.window());
         if state.game_started {
             draw_hud(ui, &mut state.core.world);
+            let positions = ctf_player_label_positions(&state.core.world);
+            draw_player_numbers(ui, &positions);
         } else {
             draw_map_selection(ui, &mut state.selected_map_idx, &mut start_game);
         }
@@ -394,7 +431,10 @@ fn draw_map_selection(ui: &imgui::Ui, selected_idx: &mut usize, start_game: &mut
     let win_h = 120.0_f32;
     ui.window("Select Map")
         .size([win_w, win_h], imgui::Condition::Always)
-        .position([(w - win_w) * 0.5, (h - win_h) * 0.5], imgui::Condition::Always)
+        .position(
+            [(w - win_w) * 0.5, (h - win_h) * 0.5],
+            imgui::Condition::Always,
+        )
         .resizable(false)
         .collapsible(false)
         .build(|| {
@@ -406,6 +446,19 @@ fn draw_map_selection(ui: &imgui::Ui, selected_idx: &mut usize, start_game: &mut
                 *start_game = true;
             }
         });
+}
+
+fn ctf_player_label_positions(world: &World) -> Vec<(CtfSlot, (f32, f32))> {
+    let Some(refs) = world.resource::<EntityRefs>() else {
+        return Vec::new();
+    };
+    CtfSlot::ALL
+        .iter()
+        .filter_map(|slot| {
+            let transform = world.get::<Transform>(refs.player(*slot))?;
+            Some((*slot, (transform.position.x, transform.position.y)))
+        })
+        .collect()
 }
 
 fn make_draw_cmd(transform: &Transform, shape: &Shape, color: &Color) -> DrawCommand {

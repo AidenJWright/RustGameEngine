@@ -45,12 +45,12 @@ impl EntityRefs {
     }
 }
 
-/// Which player is currently carrying which opponent flag.
+/// Which player is currently carrying each flag.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CarrierState {
-    /// Blue-team slot carrying the red flag.
+    /// Slot carrying the red flag.
     pub red_flag_carrier: Option<CtfSlot>,
-    /// Red-team slot carrying the blue flag.
+    /// Slot carrying the blue flag.
     pub blue_flag_carrier: Option<CtfSlot>,
 }
 
@@ -60,6 +60,7 @@ pub struct FlagMotion {
     pub dir_x: f32,
     pub dir_y: f32,
     pub remaining_distance: f32,
+    pub released_by: Option<CtfSlot>,
 }
 
 /// Active throw motion for each team flag.
@@ -142,6 +143,39 @@ pub struct PlayerControl {
     pub restart_down: bool,
 }
 
+impl PlayerControl {
+    pub fn fallback_slot(&self) -> CtfSlot {
+        if self.owned_slots.contains(&self.primary_slot) {
+            self.primary_slot
+        } else {
+            self.owned_slots
+                .first()
+                .copied()
+                .unwrap_or(self.primary_slot)
+        }
+    }
+
+    pub fn normalize_selected_slot(&mut self) -> bool {
+        if self.owned_slots.contains(&self.selected_slot) {
+            return false;
+        }
+        self.selected_slot = self.fallback_slot();
+        true
+    }
+
+    pub fn select_owned_slot(&mut self, slot: CtfSlot) -> bool {
+        if self.owned_slots.contains(&slot) {
+            if self.selected_slot == slot {
+                return false;
+            }
+            self.selected_slot = slot;
+            true
+        } else {
+            self.normalize_selected_slot()
+        }
+    }
+}
+
 /// All active CTF control mappings.
 #[derive(Debug, Clone, Default)]
 pub struct ControlState {
@@ -149,6 +183,30 @@ pub struct ControlState {
 }
 
 impl ControlState {
+    pub fn normalize_selected_slots(&mut self) -> bool {
+        let mut changed = false;
+        for control in &mut self.controls {
+            changed |= control.normalize_selected_slot();
+        }
+        changed
+    }
+
+    pub fn apply_selected_assignment(&mut self, assignment: &CtfSlotAssignment) -> bool {
+        self.controls
+            .iter_mut()
+            .find(|control| control.client_id == assignment.client_id)
+            .is_some_and(|control| control.select_owned_slot(assignment.primary_slot))
+    }
+
+    pub fn apply_selected_assignments(&mut self, assignments: &[CtfSlotAssignment]) -> bool {
+        let mut changed = false;
+        for assignment in assignments {
+            changed |= self.apply_selected_assignment(assignment);
+        }
+        changed |= self.normalize_selected_slots();
+        changed
+    }
+
     pub fn selected_assignments(&self) -> Vec<CtfSlotAssignment> {
         let mut assignments = self
             .controls
@@ -163,6 +221,54 @@ impl ControlState {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn control(client_id: u64) -> PlayerControl {
+        PlayerControl {
+            client_id,
+            primary_slot: CtfSlot::Red1,
+            selected_slot: CtfSlot::Red1,
+            owned_slots: vec![CtfSlot::Red1, CtfSlot::Red2],
+            tag_down: false,
+            switch_down: false,
+            restart_down: false,
+        }
+    }
+
+    #[test]
+    fn selected_assignment_must_be_owned() {
+        let mut controls = ControlState {
+            controls: vec![control(1)],
+        };
+        controls.controls[0].selected_slot = CtfSlot::Red2;
+
+        assert!(!controls.apply_selected_assignment(&CtfSlotAssignment {
+            client_id: 1,
+            primary_slot: CtfSlot::Red3,
+        }));
+        assert_eq!(controls.controls[0].selected_slot, CtfSlot::Red2);
+
+        assert!(controls.apply_selected_assignment(&CtfSlotAssignment {
+            client_id: 1,
+            primary_slot: CtfSlot::Red1,
+        }));
+        assert_eq!(controls.controls[0].selected_slot, CtfSlot::Red1);
+    }
+
+    #[test]
+    fn invalid_current_selection_repairs_to_owned_slot() {
+        let mut controls = ControlState {
+            controls: vec![control(1)],
+        };
+        controls.controls[0].selected_slot = CtfSlot::Red3;
+
+        assert!(controls.normalize_selected_slots());
+        assert_eq!(controls.controls[0].selected_slot, CtfSlot::Red1);
+    }
+}
+
 /// Input frames gathered for the next CTF simulation pass.
 #[derive(Debug, Clone, Default)]
 pub struct CtfInputState {
@@ -173,4 +279,30 @@ pub struct CtfInputState {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CtfSyncState {
     pub dirty: bool,
+    pub forced_player_authority: [bool; CtfSlot::COUNT],
+}
+
+impl CtfSyncState {
+    pub fn dirty() -> Self {
+        Self {
+            dirty: true,
+            ..Self::default()
+        }
+    }
+
+    pub fn with_forced_player(slot: CtfSlot) -> Self {
+        let mut sync = Self::dirty();
+        sync.force_player(slot);
+        sync
+    }
+
+    pub fn force_player(&mut self, slot: CtfSlot) {
+        self.forced_player_authority[slot.index()] = true;
+    }
+
+    pub fn forced_players(&self) -> impl Iterator<Item = CtfSlot> + '_ {
+        CtfSlot::ALL
+            .into_iter()
+            .filter(|slot| self.forced_player_authority[slot.index()])
+    }
 }

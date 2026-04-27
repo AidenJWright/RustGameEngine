@@ -29,7 +29,10 @@ impl System for AutoMoveSystem {
         let Some(refs) = world.resource::<EntityRefs>().cloned() else {
             return;
         };
-        let mut auto_move = world.resource::<AutoMoveState>().cloned().unwrap_or_default();
+        let mut auto_move = world
+            .resource::<AutoMoveState>()
+            .cloned()
+            .unwrap_or_default();
         let mut changed = false;
         let mut finished = false;
 
@@ -81,7 +84,7 @@ impl System for AutoMoveSystem {
             commands.insert_resource(auto_move);
         }
         if finished {
-            commands.insert_resource(CtfSyncState { dirty: true });
+            commands.insert_resource(CtfSyncState::dirty());
         }
     }
 }

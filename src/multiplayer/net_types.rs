@@ -129,6 +129,9 @@ pub struct EntityStatePacket {
     pub rotation: f32,
     /// Scale component for future extension.
     pub scale: (f32, f32, f32),
+    /// Optional linear velocity for entities that are movement-extrapolated.
+    #[serde(default)]
+    pub velocity: Option<(f32, f32)>,
 }
 
 impl From<(crate::ecs::entity::Entity, &Transform)> for EntityStatePacket {
@@ -143,6 +146,7 @@ impl From<(crate::ecs::entity::Entity, &Transform)> for EntityStatePacket {
             ),
             rotation: transform.rotation,
             scale: (transform.scale.x, transform.scale.y, transform.scale.z),
+            velocity: None,
         }
     }
 }
@@ -187,6 +191,8 @@ pub struct CtfFlagMotionSnapshot {
     pub dir_x: f32,
     pub dir_y: f32,
     pub remaining_distance: f32,
+    #[serde(default)]
+    pub released_by: Option<CtfSlot>,
 }
 
 /// Serializable auto-move path row for CTF snapshots.

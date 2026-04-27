@@ -3,7 +3,7 @@
 use std::collections::{hash_map::DefaultHasher, HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
 
-use crate::components::{Camera, Transform};
+use crate::components::{Camera, Transform, Velocity};
 use crate::ecs::entity::Entity;
 use crate::ecs::world::World;
 use crate::game::ctf::resources::{
@@ -317,6 +317,9 @@ pub fn capture_snapshot(world: &World, tick: NetworkTick) -> Snapshot {
         .map(|(entity, transform)| {
             let mut packet = EntityStatePacket::from((entity, transform));
             packet.stable_id = stable_ids.get(&packet.entity).copied();
+            packet.velocity = world
+                .get::<Velocity>(entity)
+                .map(|velocity| (velocity.dx, velocity.dy));
             packet
         })
         .collect();
@@ -355,15 +358,7 @@ pub fn apply_snapshot(world: &mut World, snapshot: &Snapshot) {
             paths: restore_auto_paths(&ctf.auto_paths),
         });
         if let Some(mut controls) = world.resource::<ControlState>().cloned() {
-            for assignment in &ctf.selected_slots {
-                if let Some(control) = controls
-                    .controls
-                    .iter_mut()
-                    .find(|control| control.client_id == assignment.client_id)
-                {
-                    control.selected_slot = assignment.primary_slot;
-                }
-            }
+            controls.apply_selected_assignments(&ctf.selected_slots);
             world.insert_resource(controls);
         }
     }
@@ -409,6 +404,9 @@ where
                 scale: crate::math::Vec3::new(state.scale.0, state.scale.1, state.scale.2),
             };
             world.insert(entity, transform);
+            if let Some((dx, dy)) = state.velocity {
+                world.insert(entity, Velocity { dx, dy });
+            }
         }
     });
 }
@@ -494,6 +492,7 @@ fn capture_motion(motion: FlagMotion) -> CtfFlagMotionSnapshot {
         dir_x: motion.dir_x,
         dir_y: motion.dir_y,
         remaining_distance: motion.remaining_distance,
+        released_by: motion.released_by,
     }
 }
 
@@ -502,6 +501,7 @@ fn restore_motion(motion: CtfFlagMotionSnapshot) -> FlagMotion {
         dir_x: motion.dir_x,
         dir_y: motion.dir_y,
         remaining_distance: motion.remaining_distance,
+        released_by: motion.released_by,
     }
 }
 
@@ -538,6 +538,7 @@ fn hash_motion_snapshot(hasher: &mut DefaultHasher, motion: Option<CtfFlagMotion
         canonicalize(motion.remaining_distance)
             .to_bits()
             .hash(hasher);
+        motion.released_by.hash(hasher);
     }
 }
 
@@ -648,6 +649,23 @@ fn interpolate_entity(
             lerp(anchor.scale.1, target.scale.1, alpha),
             lerp(anchor.scale.2, target.scale.2, alpha),
         ),
+        velocity: interpolate_velocity(anchor.velocity, target.velocity, alpha),
+    }
+}
+
+fn interpolate_velocity(
+    anchor: Option<(f32, f32)>,
+    target: Option<(f32, f32)>,
+    alpha: f32,
+) -> Option<(f32, f32)> {
+    match (anchor, target) {
+        (Some(anchor), Some(target)) => Some((
+            lerp(anchor.0, target.0, alpha),
+            lerp(anchor.1, target.1, alpha),
+        )),
+        (_, Some(target)) => Some(target),
+        (Some(anchor), None) => Some(anchor),
+        (None, None) => None,
     }
 }
 
@@ -725,6 +743,26 @@ mod tests {
         let snapshot = capture_snapshot(&world, 42);
 
         assert_eq!(snapshot_hash(&snapshot), state_hash(&world, 42));
+    }
+
+    #[test]
+    fn snapshots_capture_and_apply_velocity() {
+        let mut world = World::new();
+        let entity = world.spawn();
+        world.insert(entity, Transform::identity());
+        world.insert(entity, Velocity { dx: 12.0, dy: -4.0 });
+
+        let snapshot = capture_snapshot(&world, 7);
+        assert_eq!(snapshot.entities[0].velocity, Some((12.0, -4.0)));
+
+        world.insert(entity, Velocity { dx: 99.0, dy: 99.0 });
+        let mut correction = snapshot;
+        correction.entities[0].velocity = Some((0.0, 0.0));
+
+        apply_snapshot_authority(&mut world, &correction, |_| true);
+
+        let velocity = world.get::<Velocity>(entity).expect("velocity");
+        assert_eq!((velocity.dx, velocity.dy), (0.0, 0.0));
     }
 
     #[test]
@@ -816,6 +854,7 @@ mod tests {
                 dir_x: 1.0,
                 dir_y: 0.0,
                 remaining_distance: 120.0,
+                released_by: Some(CtfSlot::Blue1),
             }),
             blue: None,
         });
@@ -857,6 +896,7 @@ mod tests {
                 dir_x: 1.0,
                 dir_y: 0.0,
                 remaining_distance: 120.0,
+                released_by: Some(CtfSlot::Blue1),
             })
         );
         let auto_move = world.resource::<AutoMoveState>().expect("auto move");
@@ -895,6 +935,7 @@ mod tests {
                 position: (42.0, 0.0, 0.0),
                 rotation: 0.0,
                 scale: (1.0, 1.0, 1.0),
+                velocity: None,
             }],
             ctf: None,
         };
@@ -917,6 +958,7 @@ mod tests {
                 position: (0.0, 0.0, 0.0),
                 rotation: 0.0,
                 scale: (1.0, 1.0, 1.0),
+                velocity: None,
             }],
             ctf: None,
         });
@@ -930,6 +972,7 @@ mod tests {
                     position: (42.0, 0.0, 0.0),
                     rotation: 0.0,
                     scale: (1.0, 1.0, 1.0),
+                    velocity: None,
                 }],
                 ctf: None,
             },
@@ -951,6 +994,7 @@ mod tests {
                 position: (x, 0.0, 0.0),
                 rotation: 0.0,
                 scale: (1.0, 1.0, 1.0),
+                velocity: None,
             }],
             ctf: None,
         }
@@ -966,6 +1010,7 @@ mod tests {
                     position: (local_x, 0.0, 0.0),
                     rotation: 0.0,
                     scale: (1.0, 1.0, 1.0),
+                    velocity: None,
                 },
                 EntityStatePacket {
                     entity: (2, 0),
@@ -973,6 +1018,7 @@ mod tests {
                     position: (remote_x, 0.0, 0.0),
                     rotation: 0.0,
                     scale: (1.0, 1.0, 1.0),
+                    velocity: None,
                 },
             ],
             ctf: None,

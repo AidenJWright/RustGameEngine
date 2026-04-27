@@ -28,3 +28,14 @@ pub struct Wall {
 }
 
 impl Component for Wall {}
+
+/// Area that only blocks players from one team.
+#[derive(Debug, Clone)]
+pub struct TeamRestrictedZone {
+    /// Blocked team id: 1 = red, 2 = blue.
+    pub team_id: u8,
+    pub w: f32,
+    pub h: f32,
+}
+
+impl Component for TeamRestrictedZone {}

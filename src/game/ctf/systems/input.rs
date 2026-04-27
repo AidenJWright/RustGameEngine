@@ -11,15 +11,15 @@ use crate::game::ctf::resources::{
     NavigationGrid,
 };
 use crate::game::ctf::{
-    ACTION_RESTART, ACTION_SWITCH, ACTION_TAG, FLAG_KNOCKDOWN_RANGE, FLAG_THROW_DISTANCE,
-    PLAYER_SPEED, TAG_RANGE,
+    ACTION_RESTART, ACTION_SELECT_SLOTS, ACTION_SWITCH, ACTION_TAG, FLAG_THROW_DISTANCE,
+    PLAYER_SPEED,
 };
 use crate::math::Vec3;
 use crate::multiplayer::matchmaking::CtfSlot;
 use crate::multiplayer::matchmaking::MapSize;
 use crate::multiplayer::{CtfFlagId, CtfFlagThrowInput, InputFrame};
 
-use super::{distance_sq, is_playing};
+use super::is_playing;
 
 /// Applies CTF input frames to selected scene-authored player slots.
 #[derive(Debug, Default)]
@@ -153,7 +153,7 @@ impl System for CtfInputSystem {
             dirty = true;
         }
         if dirty {
-            commands.insert_resource(CtfSyncState { dirty: true });
+            commands.insert_resource(CtfSyncState::dirty());
         }
     }
 }
@@ -207,7 +207,7 @@ fn restart_ctf_match(
         });
         commands.insert_resource(CtfInputState::default());
         commands.insert_resource(controls);
-        commands.insert_resource(CtfSyncState { dirty: true });
+        commands.insert_resource(CtfSyncState::dirty());
     }
 }
 
@@ -263,12 +263,12 @@ fn reset_ctf_match(
     commands.insert_resource(AutoMoveState::default());
     commands.insert_resource(CtfInputState::default());
     commands.insert_resource(controls);
-    commands.insert_resource(CtfSyncState { dirty: true });
+    commands.insert_resource(CtfSyncState::dirty());
 }
 
 fn apply_frame(
     frame: &InputFrame,
-    refs: &EntityRefs,
+    _refs: &EntityRefs,
     controls: &mut ControlState,
     carrier: &mut CarrierState,
     player_transforms: &mut [Transform; CtfSlot::COUNT],
@@ -278,7 +278,7 @@ fn apply_frame(
     flag_motion: &mut FlagMotionState,
     auto_move: &mut AutoMoveState,
     nav_grid: Option<&NavigationGrid>,
-    midline_x: f32,
+    _midline_x: f32,
 ) -> bool {
     let Some(control) = controls
         .controls
@@ -290,9 +290,11 @@ fn apply_frame(
 
     let tag_down = frame.action_bits & ACTION_TAG != 0;
     let switch_down = frame.action_bits & ACTION_SWITCH != 0;
-    let tag_pressed = tag_down && !control.tag_down;
+    let throw_pressed = tag_down && !control.tag_down;
     let switch_pressed = switch_down && !control.switch_down;
     let mut dirty = false;
+    let previous_slot = control.selected_slot;
+    dirty |= control.normalize_selected_slot();
 
     if switch_pressed && control.owned_slots.len() > 1 {
         let current_index = control
@@ -303,6 +305,13 @@ fn apply_frame(
         control.selected_slot =
             control.owned_slots[(current_index + 1) % control.owned_slots.len()];
         dirty = true;
+    }
+
+    if let Some(slot) = requested_slot(control, frame.action_bits) {
+        if control.selected_slot != slot {
+            control.selected_slot = slot;
+            dirty = true;
+        }
     }
 
     let mut selected_slot = control.selected_slot;
@@ -343,15 +352,22 @@ fn apply_frame(
         }
     }
 
-    if tag_pressed {
-        let acted = apply_flag_throw_event(
-            frame.ctf_flag_throw,
-            control,
-            carrier,
-            red_flag_tf,
-            blue_flag_tf,
-            flag_motion,
-        ) || throw_carried_flag(
+    if selected_slot != previous_slot {
+        velocities[previous_slot.index()] = Velocity { dx: 0.0, dy: 0.0 };
+    }
+
+    let acted_throw_event = apply_flag_throw_event(
+        frame.ctf_flag_throw,
+        control,
+        carrier,
+        red_flag_tf,
+        blue_flag_tf,
+        flag_motion,
+    );
+    if acted_throw_event {
+        dirty = true;
+    } else if throw_pressed {
+        let acted = throw_carried_flag(
             selected_slot,
             frame
                 .ctf_pointer
@@ -362,21 +378,6 @@ fn apply_frame(
             red_flag_tf,
             blue_flag_tf,
             flag_motion,
-        ) || knock_down_own_moving_flag(
-            selected_slot,
-            player_transforms,
-            red_flag_tf,
-            blue_flag_tf,
-            flag_motion,
-        ) || tag_nearest_opponent(
-            selected_slot,
-            refs,
-            carrier,
-            player_transforms,
-            velocities,
-            red_flag_tf,
-            blue_flag_tf,
-            midline_x,
         );
         if acted {
             dirty = true;
@@ -413,16 +414,25 @@ fn apply_flag_throw_event(
         dir_x: event.dir_x,
         dir_y: event.dir_y,
         remaining_distance: FLAG_THROW_DISTANCE,
+        released_by: Some(event.slot),
     });
 
     match event.flag {
-        CtfFlagId::Blue if event.slot.is_red() => {
+        CtfFlagId::Blue
+            if carrier
+                .blue_flag_carrier
+                .map_or(true, |carrier| carrier == event.slot) =>
+        {
             carrier.blue_flag_carrier = None;
             blue_flag_tf.position = Vec3::new(start.x, start.y, blue_flag_tf.position.z);
             flag_motion.blue = motion;
             true
         }
-        CtfFlagId::Red if !event.slot.is_red() => {
+        CtfFlagId::Red
+            if carrier
+                .red_flag_carrier
+                .map_or(true, |carrier| carrier == event.slot) =>
+        {
             carrier.red_flag_carrier = None;
             red_flag_tf.position = Vec3::new(start.x, start.y, red_flag_tf.position.z);
             flag_motion.red = motion;
@@ -430,6 +440,22 @@ fn apply_flag_throw_event(
         }
         _ => false,
     }
+}
+
+fn requested_slot(
+    control: &crate::game::ctf::resources::PlayerControl,
+    action_bits: u8,
+) -> Option<CtfSlot> {
+    ACTION_SELECT_SLOTS
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, action)| {
+            if action_bits & action == 0 {
+                return None;
+            }
+            CtfSlot::from_team_number(control.primary_slot.is_red(), idx as u8 + 1)
+        })
+        .find(|slot| control.owned_slots.contains(slot))
 }
 
 fn set_auto_move_path(
@@ -464,8 +490,8 @@ fn throw_carried_flag(
     blue_flag_tf: &mut Transform,
     flag_motion: &mut FlagMotionState,
 ) -> bool {
-    let throws_blue = slot.is_red() && carrier.blue_flag_carrier == Some(slot);
-    let throws_red = !slot.is_red() && carrier.red_flag_carrier == Some(slot);
+    let throws_blue = carrier.blue_flag_carrier == Some(slot);
+    let throws_red = carrier.red_flag_carrier == Some(slot);
     if !throws_blue && !throws_red {
         return false;
     }
@@ -476,6 +502,7 @@ fn throw_carried_flag(
         dir_x,
         dir_y,
         remaining_distance: FLAG_THROW_DISTANCE,
+        released_by: Some(slot),
     });
 
     if throws_blue {
@@ -513,121 +540,6 @@ fn throw_direction(
     }
 }
 
-fn knock_down_own_moving_flag(
-    slot: CtfSlot,
-    player_transforms: &[Transform; CtfSlot::COUNT],
-    red_flag_tf: &Transform,
-    blue_flag_tf: &Transform,
-    flag_motion: &mut FlagMotionState,
-) -> bool {
-    let player = &player_transforms[slot.index()];
-    let range_sq = FLAG_KNOCKDOWN_RANGE * FLAG_KNOCKDOWN_RANGE;
-    if slot.is_red() {
-        if flag_motion.red.is_none() {
-            return false;
-        }
-        let dist = distance_sq(
-            player.position.x,
-            player.position.y,
-            red_flag_tf.position.x,
-            red_flag_tf.position.y,
-        );
-        if dist <= range_sq {
-            flag_motion.red = None;
-            return true;
-        }
-    } else {
-        if flag_motion.blue.is_none() {
-            return false;
-        }
-        let dist = distance_sq(
-            player.position.x,
-            player.position.y,
-            blue_flag_tf.position.x,
-            blue_flag_tf.position.y,
-        );
-        if dist <= range_sq {
-            flag_motion.blue = None;
-            return true;
-        }
-    }
-    false
-}
-
-fn tag_nearest_opponent(
-    tagger: CtfSlot,
-    refs: &EntityRefs,
-    carrier: &mut CarrierState,
-    player_transforms: &mut [Transform; CtfSlot::COUNT],
-    velocities: &mut [Velocity; CtfSlot::COUNT],
-    red_flag_tf: &mut Transform,
-    blue_flag_tf: &mut Transform,
-    midline_x: f32,
-) -> bool {
-    let tagger_tf = &player_transforms[tagger.index()];
-    let tagger_x = tagger_tf.position.x;
-    let tagger_y = tagger_tf.position.y;
-    let range_sq = TAG_RANGE * TAG_RANGE;
-
-    let mut best: Option<(CtfSlot, f32)> = None;
-    for opponent in tagger.opponent_slots() {
-        let opponent_tf = &player_transforms[opponent.index()];
-        let opponent_on_defender_side = if tagger.is_red() {
-            opponent_tf.position.x < midline_x
-        } else {
-            opponent_tf.position.x > midline_x
-        };
-        if !opponent_on_defender_side {
-            continue;
-        }
-
-        let dist = distance_sq(
-            tagger_x,
-            tagger_y,
-            opponent_tf.position.x,
-            opponent_tf.position.y,
-        );
-        if dist >= range_sq {
-            continue;
-        }
-
-        match best {
-            Some((best_slot, best_dist))
-                if dist > best_dist
-                    || (dist == best_dist && opponent.index() > best_slot.index()) => {}
-            _ => best = Some((*opponent, dist)),
-        }
-    }
-
-    let Some((tagged, _)) = best else {
-        return false;
-    };
-
-    let tagged_position = player_transforms[tagged.index()].position;
-    if carrier.red_flag_carrier == Some(tagged) {
-        carrier.red_flag_carrier = None;
-        red_flag_tf.position =
-            Vec3::new(tagged_position.x, tagged_position.y, red_flag_tf.position.z);
-    }
-    if carrier.blue_flag_carrier == Some(tagged) {
-        carrier.blue_flag_carrier = None;
-        blue_flag_tf.position = Vec3::new(
-            tagged_position.x,
-            tagged_position.y,
-            blue_flag_tf.position.z,
-        );
-    }
-
-    let spawn = refs.player_spawn(tagged);
-    player_transforms[tagged.index()].position = Vec3::new(
-        spawn.0,
-        spawn.1,
-        player_transforms[tagged.index()].position.z,
-    );
-    velocities[tagged.index()] = Velocity { dx: 0.0, dy: 0.0 };
-    true
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -637,6 +549,7 @@ mod tests {
         GameState,
     };
     use crate::game::ctf::setup::setup_ctf_scene_entities;
+    use crate::game::ctf::systems::TaggingSystem;
     use crate::multiplayer::matchmaking::CtfSlotAssignment;
     use crate::multiplayer::{
         CtfAutoMoveStartInput, CtfFlagId, CtfFlagThrowInput, CtfPointerInput, CtfRestartInput,
@@ -661,6 +574,12 @@ mod tests {
             MapSize::Small,
         );
         world
+    }
+
+    fn run_tagging(world: &mut World) {
+        let mut commands = CommandBuffer::new();
+        TaggingSystem.run(world, &mut commands);
+        commands.flush(world);
     }
 
     #[test]
@@ -700,21 +619,87 @@ mod tests {
     }
 
     #[test]
-    fn tag_teleports_non_carrier_opponent_home() {
+    fn number_keys_select_only_owned_team_slots() {
+        let mut world = World::new();
+        reload_scene(&mut world, "assets/ctf_arena_small.json").expect("load CTF scene");
+        setup_ctf_scene_entities(
+            &mut world,
+            &[
+                CtfSlotAssignment {
+                    client_id: 1,
+                    primary_slot: CtfSlot::Red1,
+                },
+                CtfSlotAssignment {
+                    client_id: 2,
+                    primary_slot: CtfSlot::Red3,
+                },
+            ],
+            MapSize::Small,
+        );
+        world.insert_resource(CtfInputState {
+            frames: vec![
+                InputFrame {
+                    tick: 1,
+                    player_id: 1,
+                    move_x: 0.0,
+                    move_y: 0.0,
+                    action_bits: ACTION_SELECT_SLOTS[2],
+                    ctf_pointer: None,
+                    ctf_restart: None,
+                    ctf_auto_move: None,
+                    ctf_flag_throw: None,
+                },
+                InputFrame {
+                    tick: 1,
+                    player_id: 2,
+                    move_x: 0.0,
+                    move_y: 0.0,
+                    action_bits: ACTION_SELECT_SLOTS[3],
+                    ctf_pointer: None,
+                    ctf_restart: None,
+                    ctf_auto_move: None,
+                    ctf_flag_throw: None,
+                },
+            ],
+        });
+
+        let mut commands = CommandBuffer::new();
+        CtfInputSystem.run(&world, &mut commands);
+        commands.flush(&mut world);
+
+        let controls = world.resource::<ControlState>().expect("controls");
+        let red_a = controls
+            .controls
+            .iter()
+            .find(|control| control.client_id == 1)
+            .expect("red A control");
+        let red_b = controls
+            .controls
+            .iter()
+            .find(|control| control.client_id == 2)
+            .expect("red B control");
+        assert_eq!(red_a.selected_slot, CtfSlot::Red1);
+        assert_eq!(red_b.selected_slot, CtfSlot::Red4);
+    }
+
+    #[test]
+    fn switching_control_zeroes_previous_slot_velocity() {
         let mut world = test_world();
         let refs = world.resource::<EntityRefs>().cloned().expect("refs");
-        let blue = refs.player(CtfSlot::Blue1);
-        let mut blue_tf = world.get::<Transform>(blue).cloned().expect("blue tf");
-        blue_tf.position.x = 180.0;
-        blue_tf.position.y = 320.0;
-        world.insert(blue, blue_tf);
+        world.insert(
+            refs.player(CtfSlot::Red1),
+            Velocity {
+                dx: PLAYER_SPEED,
+                dy: 0.0,
+            },
+        );
         world.insert_resource(CtfInputState {
             frames: vec![InputFrame {
                 tick: 1,
                 player_id: 1,
-                move_x: 0.0,
+                move_x: 1.0,
                 move_y: 0.0,
-                action_bits: ACTION_TAG,
+                action_bits: ACTION_SELECT_SLOTS[1],
                 ctf_pointer: None,
                 ctf_restart: None,
                 ctf_auto_move: None,
@@ -725,6 +710,98 @@ mod tests {
         let mut commands = CommandBuffer::new();
         CtfInputSystem.run(&world, &mut commands);
         commands.flush(&mut world);
+
+        let red1_velocity = world
+            .get::<Velocity>(refs.player(CtfSlot::Red1))
+            .expect("red1 velocity");
+        let red2_velocity = world
+            .get::<Velocity>(refs.player(CtfSlot::Red2))
+            .expect("red2 velocity");
+        assert_eq!((red1_velocity.dx, red1_velocity.dy), (0.0, 0.0));
+        assert_eq!((red2_velocity.dx, red2_velocity.dy), (PLAYER_SPEED, 0.0));
+    }
+
+    #[test]
+    fn input_repairs_invalid_selected_slot() {
+        let mut world = World::new();
+        reload_scene(&mut world, "assets/ctf_arena_small.json").expect("load CTF scene");
+        setup_ctf_scene_entities(
+            &mut world,
+            &[
+                CtfSlotAssignment {
+                    client_id: 1,
+                    primary_slot: CtfSlot::Red1,
+                },
+                CtfSlotAssignment {
+                    client_id: 2,
+                    primary_slot: CtfSlot::Red3,
+                },
+            ],
+            MapSize::Small,
+        );
+        let refs = world.resource::<EntityRefs>().cloned().expect("refs");
+        if let Some(mut controls) = world.resource::<ControlState>().cloned() {
+            controls
+                .controls
+                .iter_mut()
+                .find(|control| control.client_id == 1)
+                .expect("red control")
+                .selected_slot = CtfSlot::Red3;
+            world.insert_resource(controls);
+        }
+        world.insert(
+            refs.player(CtfSlot::Red3),
+            Velocity {
+                dx: PLAYER_SPEED,
+                dy: 0.0,
+            },
+        );
+        world.insert_resource(CtfInputState {
+            frames: vec![InputFrame {
+                tick: 1,
+                player_id: 1,
+                move_x: 1.0,
+                move_y: 0.0,
+                action_bits: 0,
+                ctf_pointer: None,
+                ctf_restart: None,
+                ctf_auto_move: None,
+                ctf_flag_throw: None,
+            }],
+        });
+
+        let mut commands = CommandBuffer::new();
+        CtfInputSystem.run(&world, &mut commands);
+        commands.flush(&mut world);
+
+        let controls = world.resource::<ControlState>().expect("controls");
+        let red = controls
+            .controls
+            .iter()
+            .find(|control| control.client_id == 1)
+            .expect("red control");
+        let red1_velocity = world
+            .get::<Velocity>(refs.player(CtfSlot::Red1))
+            .expect("red1 velocity");
+        let red3_velocity = world
+            .get::<Velocity>(refs.player(CtfSlot::Red3))
+            .expect("red3 velocity");
+        assert_eq!(red.selected_slot, CtfSlot::Red1);
+        assert_eq!((red1_velocity.dx, red1_velocity.dy), (PLAYER_SPEED, 0.0));
+        assert_eq!((red3_velocity.dx, red3_velocity.dy), (0.0, 0.0));
+    }
+
+    #[test]
+    fn tag_teleports_non_carrier_opponent_home() {
+        let mut world = test_world();
+        let refs = world.resource::<EntityRefs>().cloned().expect("refs");
+        let blue = refs.player(CtfSlot::Blue1);
+        let mut blue_tf = world.get::<Transform>(blue).cloned().expect("blue tf");
+        blue_tf.position.x = 320.0;
+        blue_tf.position.y = 300.0;
+        world.insert(blue, blue_tf);
+
+        run_tagging(&mut world);
 
         let blue_tf = world.get::<Transform>(blue).expect("blue tf");
         let spawn = refs.player_spawn(CtfSlot::Blue1);
@@ -737,37 +814,22 @@ mod tests {
         let refs = world.resource::<EntityRefs>().cloned().expect("refs");
         let blue = refs.player(CtfSlot::Blue1);
         let mut blue_tf = world.get::<Transform>(blue).cloned().expect("blue tf");
-        blue_tf.position.x = 180.0;
-        blue_tf.position.y = 320.0;
+        blue_tf.position.x = 320.0;
+        blue_tf.position.y = 300.0;
         world.insert(blue, blue_tf);
         world.insert_resource(CarrierState {
             red_flag_carrier: Some(CtfSlot::Blue1),
             blue_flag_carrier: None,
         });
-        world.insert_resource(CtfInputState {
-            frames: vec![InputFrame {
-                tick: 1,
-                player_id: 1,
-                move_x: 0.0,
-                move_y: 0.0,
-                action_bits: ACTION_TAG,
-                ctf_pointer: None,
-                ctf_restart: None,
-                ctf_auto_move: None,
-                ctf_flag_throw: None,
-            }],
-        });
 
-        let mut commands = CommandBuffer::new();
-        CtfInputSystem.run(&world, &mut commands);
-        commands.flush(&mut world);
+        run_tagging(&mut world);
 
         let carrier = world.resource::<CarrierState>().expect("carrier");
         assert_eq!(carrier.red_flag_carrier, None);
         let red_flag = world
             .get::<Transform>(refs.red_flag)
             .expect("red flag transform");
-        assert_eq!((red_flag.position.x, red_flag.position.y), (180.0, 320.0));
+        assert_eq!((red_flag.position.x, red_flag.position.y), (320.0, 300.0));
     }
 
     #[test]
@@ -785,7 +847,7 @@ mod tests {
                 move_y: 0.0,
                 action_bits: ACTION_TAG,
                 ctf_pointer: Some(CtfPointerInput {
-                    aim_world: Some((260.0, 300.0)),
+                    aim_world: Some((360.0, 300.0)),
                     click_world: None,
                 }),
                 ctf_restart: None,
@@ -807,6 +869,7 @@ mod tests {
                 dir_x: 1.0,
                 dir_y: 0.0,
                 remaining_distance: crate::game::ctf::FLAG_THROW_DISTANCE,
+                released_by: Some(CtfSlot::Red1),
             })
         );
     }
@@ -859,6 +922,187 @@ mod tests {
                 dir_x: 0.0,
                 dir_y: 1.0,
                 remaining_distance: crate::game::ctf::FLAG_THROW_DISTANCE,
+                released_by: Some(CtfSlot::Red1),
+            })
+        );
+    }
+
+    #[test]
+    fn announced_own_flag_throw_tolerates_lagging_empty_carrier_state() {
+        let mut world = test_world();
+        world.insert_resource(CarrierState::default());
+        world.insert_resource(CtfInputState {
+            frames: vec![InputFrame {
+                tick: 1,
+                player_id: 1,
+                move_x: 0.0,
+                move_y: 0.0,
+                action_bits: ACTION_TAG,
+                ctf_pointer: None,
+                ctf_restart: None,
+                ctf_auto_move: None,
+                ctf_flag_throw: Some(CtfFlagThrowInput {
+                    slot: CtfSlot::Red1,
+                    flag: CtfFlagId::Red,
+                    start_world: (260.0, 300.0),
+                    dir_x: 1.0,
+                    dir_y: 0.0,
+                }),
+            }],
+        });
+
+        let mut commands = CommandBuffer::new();
+        CtfInputSystem.run(&world, &mut commands);
+        commands.flush(&mut world);
+
+        let carrier = world.resource::<CarrierState>().expect("carrier");
+        assert_eq!(carrier.red_flag_carrier, None);
+        let motion = world.resource::<FlagMotionState>().expect("flag motion");
+        assert_eq!(
+            motion.red,
+            Some(FlagMotion {
+                dir_x: 1.0,
+                dir_y: 0.0,
+                remaining_distance: crate::game::ctf::FLAG_THROW_DISTANCE,
+                released_by: Some(CtfSlot::Red1),
+            })
+        );
+    }
+
+    #[test]
+    fn announced_flag_throw_ignores_stale_tag_down_edge_state() {
+        let mut world = test_world();
+        let refs = world.resource::<EntityRefs>().cloned().expect("refs");
+        world.insert_resource(CarrierState {
+            red_flag_carrier: None,
+            blue_flag_carrier: Some(CtfSlot::Red1),
+        });
+        if let Some(mut controls) = world.resource::<ControlState>().cloned() {
+            controls
+                .controls
+                .iter_mut()
+                .find(|control| control.client_id == 1)
+                .expect("red control")
+                .tag_down = true;
+            world.insert_resource(controls);
+        }
+        world.insert_resource(CtfInputState {
+            frames: vec![InputFrame {
+                tick: 1,
+                player_id: 1,
+                move_x: 0.0,
+                move_y: 0.0,
+                action_bits: ACTION_TAG,
+                ctf_pointer: None,
+                ctf_restart: None,
+                ctf_auto_move: None,
+                ctf_flag_throw: Some(CtfFlagThrowInput {
+                    slot: CtfSlot::Red1,
+                    flag: CtfFlagId::Blue,
+                    start_world: (200.0, 333.0),
+                    dir_x: 0.0,
+                    dir_y: 1.0,
+                }),
+            }],
+        });
+
+        let mut commands = CommandBuffer::new();
+        CtfInputSystem.run(&world, &mut commands);
+        commands.flush(&mut world);
+
+        let carrier = world.resource::<CarrierState>().expect("carrier");
+        assert_eq!(carrier.blue_flag_carrier, None);
+        let blue_flag = world
+            .get::<Transform>(refs.blue_flag)
+            .expect("blue flag transform");
+        assert_eq!((blue_flag.position.x, blue_flag.position.y), (200.0, 333.0));
+        let motion = world.resource::<FlagMotionState>().expect("flag motion");
+        assert_eq!(
+            motion.blue,
+            Some(FlagMotion {
+                dir_x: 0.0,
+                dir_y: 1.0,
+                remaining_distance: crate::game::ctf::FLAG_THROW_DISTANCE,
+                released_by: Some(CtfSlot::Red1),
+            })
+        );
+    }
+
+    #[test]
+    fn announced_flag_throw_does_not_override_conflicting_carrier() {
+        let mut world = test_world();
+        world.insert_resource(CarrierState {
+            red_flag_carrier: Some(CtfSlot::Red2),
+            blue_flag_carrier: None,
+        });
+        world.insert_resource(CtfInputState {
+            frames: vec![InputFrame {
+                tick: 1,
+                player_id: 1,
+                move_x: 0.0,
+                move_y: 0.0,
+                action_bits: ACTION_TAG,
+                ctf_pointer: None,
+                ctf_restart: None,
+                ctf_auto_move: None,
+                ctf_flag_throw: Some(CtfFlagThrowInput {
+                    slot: CtfSlot::Red1,
+                    flag: CtfFlagId::Red,
+                    start_world: (260.0, 300.0),
+                    dir_x: 1.0,
+                    dir_y: 0.0,
+                }),
+            }],
+        });
+
+        let mut commands = CommandBuffer::new();
+        CtfInputSystem.run(&world, &mut commands);
+        commands.flush(&mut world);
+
+        let carrier = world.resource::<CarrierState>().expect("carrier");
+        assert_eq!(carrier.red_flag_carrier, Some(CtfSlot::Red2));
+        let motion = world.resource::<FlagMotionState>().expect("flag motion");
+        assert_eq!(motion.red, None);
+    }
+
+    #[test]
+    fn carrier_action_throws_own_flag() {
+        let mut world = test_world();
+        world.insert_resource(CarrierState {
+            red_flag_carrier: Some(CtfSlot::Red1),
+            blue_flag_carrier: None,
+        });
+        world.insert_resource(CtfInputState {
+            frames: vec![InputFrame {
+                tick: 1,
+                player_id: 1,
+                move_x: 0.0,
+                move_y: 0.0,
+                action_bits: ACTION_TAG,
+                ctf_pointer: Some(CtfPointerInput {
+                    aim_world: Some((360.0, 300.0)),
+                    click_world: None,
+                }),
+                ctf_restart: None,
+                ctf_auto_move: None,
+                ctf_flag_throw: None,
+            }],
+        });
+
+        let mut commands = CommandBuffer::new();
+        CtfInputSystem.run(&world, &mut commands);
+        commands.flush(&mut world);
+
+        let carrier = world.resource::<CarrierState>().expect("carrier");
+        assert_eq!(carrier.red_flag_carrier, None);
+        let motion = world.resource::<FlagMotionState>().expect("flag motion");
+        assert_eq!(
+            motion.red,
+            Some(FlagMotion {
+                dir_x: 1.0,
+                dir_y: 0.0,
+                remaining_distance: crate::game::ctf::FLAG_THROW_DISTANCE,
+                released_by: Some(CtfSlot::Red1),
             })
         );
     }
@@ -871,6 +1115,7 @@ mod tests {
             .get::<Transform>(refs.red_flag)
             .cloned()
             .expect("red flag");
+        red_flag_tf.position.x = 320.0;
         red_flag_tf.position.y = 300.0;
         world.insert(refs.red_flag, red_flag_tf);
         world.insert_resource(FlagMotionState {
@@ -878,26 +1123,11 @@ mod tests {
                 dir_x: 1.0,
                 dir_y: 0.0,
                 remaining_distance: 80.0,
+                released_by: None,
             }),
             blue: None,
         });
-        world.insert_resource(CtfInputState {
-            frames: vec![InputFrame {
-                tick: 1,
-                player_id: 1,
-                move_x: 0.0,
-                move_y: 0.0,
-                action_bits: ACTION_TAG,
-                ctf_pointer: None,
-                ctf_restart: None,
-                ctf_auto_move: None,
-                ctf_flag_throw: None,
-            }],
-        });
-
-        let mut commands = CommandBuffer::new();
-        CtfInputSystem.run(&world, &mut commands);
-        commands.flush(&mut world);
+        run_tagging(&mut world);
 
         let motion = world.resource::<FlagMotionState>().expect("flag motion");
         assert_eq!(motion.red, None);
@@ -1064,6 +1294,7 @@ mod tests {
                 dir_x: 1.0,
                 dir_y: 0.0,
                 remaining_distance: 80.0,
+                released_by: None,
             }),
         });
         let mut paths = std::array::from_fn(|_| None);

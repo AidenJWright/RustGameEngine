@@ -73,12 +73,16 @@ pub struct ElapsedTime(pub f32);
 pub struct KeysPressed {
     /// Raw set of pressed key discriminants.
     pub held: std::collections::HashSet<u32>,
+    /// Keys pressed since the last system consumed one-shot input.
+    pub pressed: std::collections::HashSet<u32>,
 }
 
 impl KeysPressed {
     /// Record a key as pressed.
     pub fn press(&mut self, discriminant: u32) {
-        self.held.insert(discriminant);
+        if self.held.insert(discriminant) {
+            self.pressed.insert(discriminant);
+        }
     }
 
     /// Record a key as released.
@@ -86,8 +90,55 @@ impl KeysPressed {
         self.held.remove(&discriminant);
     }
 
+    /// Test and consume whether a key was pressed since the last check.
+    pub fn consume_pressed(&mut self, discriminant: u32) -> bool {
+        self.pressed.remove(&discriminant)
+    }
+
+    /// Clear all held and pending key state.
+    pub fn clear(&mut self) {
+        self.held.clear();
+        self.pressed.clear();
+    }
+
     /// Test whether a key is currently held.
     pub fn is_held(&self, discriminant: u32) -> bool {
         self.held.contains(&discriminant)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::KeysPressed;
+
+    #[test]
+    fn press_is_latched_once_until_release() {
+        let mut keys = KeysPressed::default();
+
+        keys.press(3);
+        assert!(keys.is_held(3));
+        assert!(keys.consume_pressed(3));
+        assert!(!keys.consume_pressed(3));
+
+        keys.press(3);
+        assert!(!keys.consume_pressed(3));
+
+        keys.release(3);
+        keys.press(3);
+        assert!(keys.consume_pressed(3));
+    }
+
+    #[test]
+    fn clear_resets_stuck_held_and_pressed_keys() {
+        let mut keys = KeysPressed::default();
+
+        keys.press(3);
+        keys.clear();
+
+        assert!(!keys.is_held(3));
+        assert!(!keys.consume_pressed(3));
+
+        keys.press(3);
+        assert!(keys.consume_pressed(3));
     }
 }

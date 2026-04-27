@@ -30,17 +30,15 @@ impl System for FlagMotionSystem {
         let Some(refs) = world.resource::<EntityRefs>().cloned() else {
             return;
         };
-        let mut motion = world.resource::<FlagMotionState>().copied().unwrap_or_default();
+        let mut motion = world
+            .resource::<FlagMotionState>()
+            .copied()
+            .unwrap_or_default();
         let original = motion;
         let walls = world
             .query2::<Transform, Wall>()
             .map(|(_, transform, wall)| {
-                (
-                    transform.position.x,
-                    transform.position.y,
-                    wall.w,
-                    wall.h,
-                )
+                (transform.position.x, transform.position.y, wall.w, wall.h)
             })
             .collect::<Vec<_>>();
 
@@ -64,7 +62,7 @@ impl System for FlagMotionSystem {
         if original.red.is_some() && motion.red.is_none()
             || original.blue.is_some() && motion.blue.is_none()
         {
-            commands.insert_resource(CtfSyncState { dirty: true });
+            commands.insert_resource(CtfSyncState::dirty());
         }
     }
 }

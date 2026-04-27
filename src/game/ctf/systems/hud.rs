@@ -2,12 +2,35 @@
 
 use crate::ecs::world::World;
 use crate::game::ctf::resources::{CarrierState, CtfRestartState, GamePhase, GameState};
+use crate::multiplayer::matchmaking::CtfSlot;
 use crate::multiplayer::matchmaking::MapSize;
+
+/// Draw black slot numbers centered over CTF player entities.
+pub fn draw_player_numbers(ui: &imgui::Ui, positions: &[(CtfSlot, (f32, f32))]) {
+    let draw_list = ui.get_foreground_draw_list();
+    let scale = ui.io().display_framebuffer_scale;
+    let scale_x = scale[0].max(f32::EPSILON);
+    let scale_y = scale[1].max(f32::EPSILON);
+    for (slot, (x, y)) in positions {
+        let text = slot.team_number().to_string();
+        let size = ui.calc_text_size(&text);
+        let logical_x = x / scale_x;
+        let logical_y = y / scale_y;
+        draw_list.add_text(
+            [logical_x - size[0] * 0.5, logical_y - size[1] * 0.5],
+            imgui::ImColor32::BLACK,
+            text,
+        );
+    }
+}
 
 /// Draw the CTF status HUD and win overlay.
 pub fn draw_hud(ui: &imgui::Ui, world: &mut World) {
     let display = ui.io().display_size;
-    let carrier = world.resource::<CarrierState>().copied().unwrap_or_default();
+    let carrier = world
+        .resource::<CarrierState>()
+        .copied()
+        .unwrap_or_default();
     let phase = world
         .resource::<GameState>()
         .map_or(GamePhase::Playing, |state| state.phase);
@@ -43,7 +66,7 @@ pub fn draw_hud(ui: &imgui::Ui, world: &mut World) {
             } else {
                 "Blue: red flag needed".to_string()
             });
-            ui.text_disabled("Move: WASD/Arrows  Primary: Space/Return  Switch: Left Shift");
+            ui.text_disabled("Move: WASD/Arrows  Throw: Space  Switch: Left Shift/1-4");
             ui.text_disabled("Click: auto-move  Restart after win: R  Cam-follow: Left Ctrl");
         });
 
@@ -62,7 +85,11 @@ pub fn draw_hud(ui: &imgui::Ui, world: &mut World) {
                     | imgui::WindowFlags::NO_SAVED_SETTINGS,
             )
             .build(|| {
-                let winner = if id == 1 { "Red Team Wins!" } else { "Blue Team Wins!" };
+                let winner = if id == 1 {
+                    "Red Team Wins!"
+                } else {
+                    "Blue Team Wins!"
+                };
                 ui.text(winner);
                 ui.separator();
                 let mut selected_idx = MapSize::ALL

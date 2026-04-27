@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::io;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -109,9 +109,12 @@ fn main() {
         .relay_bind
         .parse()
         .expect("matchmaker --relay-bind must be a valid socket address");
-    let relay_advertise = args
-        .relay_advertise
-        .unwrap_or_else(|| advertise_addr_for(relay_bind_addr));
+    let relay_advertise = normalize_relay_advertise(
+        args.relay_advertise
+            .unwrap_or_else(|| advertise_addr_for(relay_bind_addr)),
+        relay_bind_addr.port(),
+    )
+    .expect("matchmaker --relay-advertise must be a resolvable host:port or bare host/IP");
 
     let socket = UdpSocket::bind(bind_addr).expect("failed to bind matchmaker socket");
     let relay_socket = UdpSocket::bind(relay_bind_addr).expect("failed to bind relay socket");
@@ -1337,6 +1340,58 @@ fn advertise_addr_for(bind_addr: SocketAddr) -> String {
     SocketAddr::new(advertised_ip, bind_addr.port()).to_string()
 }
 
+fn normalize_relay_advertise(endpoint: String, default_port: u16) -> io::Result<String> {
+    let trimmed = endpoint.trim().trim_matches(['"', '\'']);
+    if trimmed.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "relay advertise endpoint is empty",
+        ));
+    }
+
+    let normalized = if trimmed.parse::<SocketAddr>().is_ok() {
+        trimmed.to_string()
+    } else if let Ok(ip) = trimmed.parse::<IpAddr>() {
+        SocketAddr::new(ip, default_port).to_string()
+    } else if endpoint_includes_port(trimmed) {
+        ensure_endpoint_resolves(trimmed)?;
+        trimmed.to_string()
+    } else {
+        let with_port = format!("{trimmed}:{default_port}");
+        ensure_endpoint_resolves(&with_port)?;
+        with_port
+    };
+
+    ensure_endpoint_resolves(&normalized)?;
+
+    Ok(normalized)
+}
+
+fn endpoint_includes_port(endpoint: &str) -> bool {
+    endpoint
+        .rsplit_once(':')
+        .is_some_and(|(_, port)| port.parse::<u16>().is_ok())
+}
+
+fn ensure_endpoint_resolves(endpoint: &str) -> io::Result<()> {
+    endpoint
+        .to_socket_addrs()
+        .map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("relay advertise endpoint '{endpoint}' did not resolve: {error}"),
+            )
+        })?
+        .next()
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("relay advertise endpoint '{endpoint}' did not resolve"),
+            )
+        })?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1519,5 +1574,21 @@ mod tests {
         )
         .expect_err("non-host update should be rejected");
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+    }
+
+    #[test]
+    fn relay_advertise_accepts_bare_ip() {
+        let endpoint =
+            normalize_relay_advertise("136.118.42.95".to_string(), 7001).expect("normalize");
+
+        assert_eq!(endpoint, "136.118.42.95:7001");
+    }
+
+    #[test]
+    fn relay_advertise_strips_accidental_shell_quotes() {
+        let endpoint =
+            normalize_relay_advertise("'136.118.42.95:7001'".to_string(), 7001).expect("normalize");
+
+        assert_eq!(endpoint, "136.118.42.95:7001");
     }
 }

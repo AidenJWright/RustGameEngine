@@ -322,6 +322,15 @@ impl MatchSession {
         self.send_message_to_relay(NetMessage::HostCorrection { tick, snapshot });
     }
 
+    /// Send an authority-scoped snapshot to all peers.
+    pub fn send_authority_snapshot(
+        &mut self,
+        tick: NetworkTick,
+        snapshot: super::net_types::Snapshot,
+    ) {
+        self.send_message_to_relay(NetMessage::AuthoritySnapshot { tick, snapshot });
+    }
+
     fn receive_packets(&mut self) {
         let mut buffer = [0_u8; 65_536];
         loop {
@@ -370,7 +379,19 @@ impl MatchSession {
                     }
                     NetMessage::HostCorrection { tick, snapshot } => {
                         self.event_queue
-                            .push_back(NetworkEvent::CorrectionReceived { tick, snapshot });
+                            .push_back(NetworkEvent::CorrectionReceived {
+                                from_peer_id: from_client_id,
+                                tick,
+                                snapshot,
+                            });
+                    }
+                    NetMessage::AuthoritySnapshot { tick, snapshot } => {
+                        self.event_queue
+                            .push_back(NetworkEvent::AuthoritySnapshotReceived {
+                                from_peer_id: from_client_id,
+                                tick,
+                                snapshot,
+                            });
                     }
                 }
             }
@@ -425,13 +446,22 @@ fn resolve_relay_addr(state: &MatchState) -> io::Result<SocketAddr> {
     state
         .relay
         .udp_endpoint
-        .to_socket_addrs()?
+        .to_socket_addrs()
+        .map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!(
+                    "relay endpoint '{}' could not be resolved; expected host:port like 136.118.42.95:7001: {error}",
+                    state.relay.udp_endpoint
+                ),
+            )
+        })?
         .next()
         .ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!(
-                    "relay endpoint '{}' did not resolve",
+                    "relay endpoint '{}' did not resolve; expected host:port like 136.118.42.95:7001",
                     state.relay.udp_endpoint
                 ),
             )

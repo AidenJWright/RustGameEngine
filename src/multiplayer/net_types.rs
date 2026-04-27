@@ -24,7 +24,7 @@ pub const NET_CHANNEL_CONTROL: u8 = 1;
 pub const NET_CHANNEL_CORRECTION: u8 = 2;
 
 /// Wire protocol version for relay packets.
-pub const RELAY_PROTOCOL_VERSION: u16 = 1;
+pub const RELAY_PROTOCOL_VERSION: u16 = 2;
 
 /// Default tick-rate used by host/client sessions.
 pub const DEFAULT_TICK_RATE: u32 = 60;
@@ -51,6 +51,12 @@ pub struct InputFrame {
     /// Optional CTF-only restart settings captured when restart is requested.
     #[serde(default)]
     pub ctf_restart: Option<CtfRestartInput>,
+    /// Optional CTF-only point-and-click path start.
+    #[serde(default)]
+    pub ctf_auto_move: Option<CtfAutoMoveStartInput>,
+    /// Optional CTF-only flag throw start.
+    #[serde(default)]
+    pub ctf_flag_throw: Option<CtfFlagThrowInput>,
 }
 
 /// CTF pointer command data attached to an input frame.
@@ -68,11 +74,55 @@ pub struct CtfRestartInput {
     pub map_size: MapSize,
 }
 
+/// CTF point-and-click path command data attached to an input frame.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct CtfAutoMoveStartInput {
+    /// Slot that should begin following the path.
+    pub slot: CtfSlot,
+    /// Authoritative start position used by all peers to calculate the same path.
+    pub start_world: (f32, f32),
+    /// Requested destination in world coordinates.
+    pub target_world: (f32, f32),
+}
+
+/// CTF flag identity for explicit throw events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CtfFlagId {
+    Red,
+    Blue,
+}
+
+/// CTF flag throw command data attached to an input frame.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct CtfFlagThrowInput {
+    /// Slot that threw the flag.
+    pub slot: CtfSlot,
+    /// Flag being thrown.
+    pub flag: CtfFlagId,
+    /// Authoritative release point used by all peers to start the same motion.
+    pub start_world: (f32, f32),
+    /// Normalized throw direction.
+    pub dir_x: f32,
+    pub dir_y: f32,
+}
+
+/// Stable gameplay identity for scene-authored entities whose local ECS ids may
+/// differ between peers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum StableEntityId {
+    CtfPlayer(CtfSlot),
+    CtfRedFlag,
+    CtfBlueFlag,
+}
+
 /// Canonical per-entity snapshot row used for host corrections.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityStatePacket {
     /// Network-stable entity identity.
     pub entity: NetworkEntityId,
+    /// Optional gameplay-stable identity used when ECS ids are not portable.
+    #[serde(default)]
+    pub stable_id: Option<StableEntityId>,
     /// Position vector used by core transform state.
     pub position: (f32, f32, f32),
     /// Rotation component for future extension.
@@ -85,6 +135,7 @@ impl From<(crate::ecs::entity::Entity, &Transform)> for EntityStatePacket {
     fn from((entity, transform): (crate::ecs::entity::Entity, &Transform)) -> Self {
         Self {
             entity: (entity.index, entity.generation),
+            stable_id: None,
             position: (
                 transform.position.x,
                 transform.position.y,
@@ -165,6 +216,13 @@ pub enum NetMessage {
         /// Authoritative state that should be restored.
         snapshot: Snapshot,
     },
+    /// Authoritative state for the sender's locally-controlled entities.
+    AuthoritySnapshot {
+        /// Simulation tick this snapshot is for.
+        tick: NetworkTick,
+        /// Snapshot containing the sender's authoritative view.
+        snapshot: Snapshot,
+    },
 }
 
 /// Packet sent by a game client to the matchmaker relay.
@@ -213,7 +271,7 @@ pub enum RelayServerPacket {
 /// Internal sync policy consumed by multiplayer sessions.
 #[derive(Debug, Clone)]
 pub enum SyncMode {
-    /// Replicate only local inputs; host remains authoritative.
+    /// Replicate local inputs and authority-scoped peer snapshots.
     InputReplication,
     /// Full lockstep mode (reserved for future extension).
     Lockstep,
@@ -291,8 +349,19 @@ pub type PlayerInputFrame = InputFrame;
 pub enum NetworkEvent {
     /// Received a remote command.
     InputReceived(InputFrame),
-    /// Host authoritative state correction.
+    /// Legacy host correction, filtered by the sender's authority at runtime.
     CorrectionReceived {
+        /// Peer that authored this snapshot.
+        from_peer_id: u64,
+        /// Simulation tick to reconcile onto.
+        tick: NetworkTick,
+        /// Authoritative full snapshot.
+        snapshot: Snapshot,
+    },
+    /// Received an authority-scoped snapshot from a peer.
+    AuthoritySnapshotReceived {
+        /// Peer that authored this snapshot.
+        from_peer_id: u64,
         /// Simulation tick to reconcile onto.
         tick: NetworkTick,
         /// Authoritative full snapshot.

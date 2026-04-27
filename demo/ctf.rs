@@ -252,6 +252,8 @@ fn queue_local_debug_inputs(world: &mut World) {
             | (if restart { ACTION_RESTART } else { 0 }),
         ctf_pointer: pointer_input,
         ctf_restart: ctf_restart_input(world, restart),
+        ctf_auto_move: None,
+        ctf_flag_throw: None,
     });
     frames.push(InputFrame {
         tick: 0,
@@ -266,6 +268,8 @@ fn queue_local_debug_inputs(world: &mut World) {
             click_world: None,
         }),
         ctf_restart: ctf_restart_input(world, restart),
+        ctf_auto_move: None,
+        ctf_flag_throw: None,
     });
     world.insert_resource(CtfInputState { frames });
 }

@@ -207,7 +207,7 @@ contains only player identities and that player's relay token.
 Build and push a new image tag:
 
 ```bash
-export IMAGE_TAG="relay-v2"
+export IMAGE_TAG="relay-v3"
 export IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${IMAGE_NAME}:${IMAGE_TAG}"
 
 docker build -f Dockerfile.matchmaker -t "${IMAGE_URI}" .
@@ -218,6 +218,11 @@ SSH to the VM and restart with the new image:
 
 ```bash
 gcloud compute ssh "${VM_NAME}" --zone="${ZONE}" --command="
+TOKEN=\$(curl -s -H 'Metadata-Flavor: Google' \
+  http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token \
+  | jq -r .access_token) &&
+echo \"\${TOKEN}\" | sudo docker login -u oauth2accesstoken --password-stdin \
+  https://${REGION}-docker.pkg.dev &&
 sudo docker pull '${IMAGE_URI}' &&
 sudo docker rm -f forge-matchmaker &&
 sudo docker run -d \

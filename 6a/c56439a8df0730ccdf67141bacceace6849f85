@@ -1,0 +1,59 @@
+demo/game.rs
+  h_e11066131581f1 327
+  1fb5e13d38c9a391 12,14,33-34,42-45,53-57,189-276,280-301,317-326,328-332,335-340,491,1183,1211-1229,1243,1250-1258,1262-1434,1456-1467,1744-1747,1815-1818,2184-2209,2212-2213,2223-2224,2246-2274,2291-2298,2307-2308,2310-2475,2480-2495,2498-2501,2524-2539,2542-2547,2888-3076
+src/multiplayer/mod.rs
+  1fb5e13d38c9a391 11-22
+docs/google-cloud-relay-deployment.md
+  h_e11066131581f1 210,221-225
+src/multiplayer/rollback.rs
+  h_e11066131581f1 25
+  1fb5e13d38c9a391 1,3,7,10-11,17,24,26-226,258-259,261-274,278,280-291,293-300,312,317-321,340,344,372-449,472-475,522,533,538-540,544-665,712-787,873-979
+demo/ctf.rs
+  1fb5e13d38c9a391 255-256,271-272
+src/bin/matchmaker.rs
+  1fb5e13d38c9a391 8,112-117,1343-1394,1578-1592
+src/multiplayer/net_types.rs
+  1fb5e13d38c9a391 27,54-59,77-117,123-125,138,219-225,274,352,354-364
+src/game/ctf/systems/input.rs
+  1fb5e13d38c9a391 19-20,53,71-74,76-79,81-84,98-103,192-195,239-243,303-304,308,315-331,337-342,347-354,356-359,395-457,609-610,614-618,641-643,678-679,720-721,756-757,792-793,814-865,893-894,921-922,936-995,1014-1015,1040-1046,1084-1085,1097-1100,1110-1113,1144-1145
+src/multiplayer/session.rs
+  1fb5e13d38c9a391 325-333,382-394,449-458,464
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "6ac56439a8df0730ccdf67141bacceace6849f85",
+  "prompts": {
+    "1fb5e13d38c9a391": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019dcc10-8006-7272-8a7b-4d69cbbdda56",
+        "model": "gpt-5.5"
+      },
+      "human_author": "RM",
+      "messages": [],
+      "total_additions": 3938,
+      "total_deletions": 2199,
+      "accepted_lines": 2323,
+      "overriden_lines": 2
+    },
+    "e9baa2342f4b1286": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019dcc10-806d-74a0-9ff8-bda1e96e8d0e",
+        "model": "unknown"
+      },
+      "human_author": "RM",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    }
+  },
+  "humans": {
+    "h_e11066131581f1": {
+      "author": "RM"
+    }
+  }
+}

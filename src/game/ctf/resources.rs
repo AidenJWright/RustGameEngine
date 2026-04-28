@@ -98,6 +98,12 @@ pub struct CtfPointerState {
     pub pending_left_click_world: Option<(f32, f32)>,
 }
 
+/// Local presentation state for the CTF HUD.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CtfHudState {
+    pub collapsed: bool,
+}
+
 /// Selected map size and pending level reload for the post-win restart panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CtfRestartState {

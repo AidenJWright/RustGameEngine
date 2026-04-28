@@ -1358,6 +1358,7 @@ fn ctf_owned_slots(world: &World, peer_id: u64) -> Vec<CtfSlot> {
         .unwrap_or_default()
 }
 
+/*
 fn apply_ctf_authority_resources(
     world: &mut World,
     snapshot: &Snapshot,
@@ -1383,6 +1384,7 @@ fn apply_ctf_authority_resources(
         &authority_keys,
     );
 }
+*/
 
 fn apply_ctf_authority_resources_with_keys(
     world: &mut World,

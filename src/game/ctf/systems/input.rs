@@ -11,8 +11,8 @@ use crate::game::ctf::resources::{
     NavigationGrid,
 };
 use crate::game::ctf::{
-    ACTION_RESTART, ACTION_SELECT_SLOTS, ACTION_SWITCH, ACTION_TAG, FLAG_THROW_DISTANCE,
-    PLAYER_SPEED,
+    ACTION_RESTART, ACTION_SELECT_SLOTS, ACTION_SWITCH, ACTION_TAG, FLAG_RADIUS,
+    FLAG_THROW_DISTANCE, PLAYER_SPEED,
 };
 use crate::math::Vec3;
 use crate::multiplayer::matchmaking::CtfSlot;
@@ -130,6 +130,28 @@ impl System for CtfInputSystem {
                 dirty = true;
             }
         }
+
+        // Reset non-selected slot velocities to zero so repulsion below cannot
+        // accumulate across ticks (non-selected slots should be stationary).
+        let selected: std::collections::HashSet<CtfSlot> = controls
+            .controls
+            .iter()
+            .map(|c| c.selected_slot)
+            .collect();
+        for slot in CtfSlot::ALL {
+            if !selected.contains(&slot) {
+                velocities[slot.index()] = Velocity { dx: 0.0, dy: 0.0 };
+            }
+        }
+
+        apply_flag_repulsion(
+            &player_transforms,
+            &mut velocities,
+            &red_flag_tf,
+            &blue_flag_tf,
+            &carrier,
+            &flag_motion,
+        );
 
         for slot in CtfSlot::ALL {
             commands.insert(refs.player(slot), player_transforms[slot.index()].clone());
@@ -538,6 +560,64 @@ fn throw_direction(
     } else {
         (-1.0, 0.0)
     }
+}
+
+fn apply_flag_repulsion(
+    player_transforms: &[Transform; CtfSlot::COUNT],
+    velocities: &mut [Velocity; CtfSlot::COUNT],
+    red_flag_tf: &Transform,
+    blue_flag_tf: &Transform,
+    carrier: &CarrierState,
+    flag_motion: &FlagMotionState,
+) {
+    let protection_radius_sq = (5.0 * FLAG_RADIUS) * (5.0 * FLAG_RADIUS);
+    let repulsion_speed = 2.0 * PLAYER_SPEED;
+
+    if carrier.red_flag_carrier.is_none() && flag_motion.red.is_none() {
+        for slot in CtfSlot::RED {
+            repel_from_flag(
+                slot,
+                player_transforms,
+                velocities,
+                red_flag_tf,
+                protection_radius_sq,
+                repulsion_speed,
+            );
+        }
+    }
+
+    if carrier.blue_flag_carrier.is_none() && flag_motion.blue.is_none() {
+        for slot in CtfSlot::BLUE {
+            repel_from_flag(
+                slot,
+                player_transforms,
+                velocities,
+                blue_flag_tf,
+                protection_radius_sq,
+                repulsion_speed,
+            );
+        }
+    }
+}
+
+fn repel_from_flag(
+    slot: CtfSlot,
+    player_transforms: &[Transform; CtfSlot::COUNT],
+    velocities: &mut [Velocity; CtfSlot::COUNT],
+    flag_tf: &Transform,
+    protection_radius_sq: f32,
+    repulsion_speed: f32,
+) {
+    let player_pos = &player_transforms[slot.index()].position;
+    let dx = player_pos.x - flag_tf.position.x;
+    let dy = player_pos.y - flag_tf.position.y;
+    let dist_sq = dx * dx + dy * dy;
+    if dist_sq >= protection_radius_sq || dist_sq <= f32::EPSILON {
+        return;
+    }
+    let dist = dist_sq.sqrt();
+    velocities[slot.index()].dx += dx / dist * repulsion_speed;
+    velocities[slot.index()].dy += dy / dist * repulsion_speed;
 }
 
 #[cfg(test)]

@@ -66,28 +66,6 @@ impl System for FlagPickupSystem {
             );
         }
 
-        if flag_is_available(carrier.red_flag_carrier, flag_motion.red) {
-            carrier.red_flag_carrier = first_overlapping_slot(
-                world,
-                &refs,
-                &CtfSlot::RED,
-                red_flag_tf,
-                pickup_range_sq,
-                &carrier,
-            );
-        }
-
-        if flag_is_available(carrier.blue_flag_carrier, flag_motion.blue) {
-            carrier.blue_flag_carrier = first_overlapping_slot(
-                world,
-                &refs,
-                &CtfSlot::BLUE,
-                blue_flag_tf,
-                pickup_range_sq,
-                &carrier,
-            );
-        }
-
         if carrier.blue_flag_carrier != original.blue_flag_carrier
             || carrier.red_flag_carrier != original.red_flag_carrier
         {
@@ -158,7 +136,7 @@ mod tests {
     }
 
     #[test]
-    fn player_can_pick_up_own_flag_when_empty_handed() {
+    fn player_cannot_pick_up_own_flag() {
         let mut world = test_world();
         let refs = world.resource::<EntityRefs>().cloned().expect("refs");
         let red = refs.player(CtfSlot::Red1);
@@ -176,7 +154,7 @@ mod tests {
         commands.flush(&mut world);
 
         let carrier = world.resource::<CarrierState>().expect("carrier");
-        assert_eq!(carrier.red_flag_carrier, Some(CtfSlot::Red1));
+        assert_eq!(carrier.red_flag_carrier, None);
     }
 
     #[test]

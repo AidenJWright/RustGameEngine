@@ -166,7 +166,7 @@ fn tag_nearest_opponent(
 
     let mut best: Option<(CtfSlot, f32)> = None;
     for opponent in tagger.opponent_slots() {
-        if !can_tag(tagger, *opponent, carrier, player_transforms, midline_x) {
+        if !can_tag(tagger, *opponent, player_transforms, midline_x) {
             continue;
         }
 
@@ -237,14 +237,9 @@ fn drop_carried_flags(
 fn can_tag(
     tagger: CtfSlot,
     opponent: CtfSlot,
-    carrier: &CarrierState,
     player_transforms: &[Transform; CtfSlot::COUNT],
     midline_x: f32,
 ) -> bool {
-    if carries_own_flag(opponent, carrier) {
-        return true;
-    }
-
     let tagger_x = player_transforms[tagger.index()].position.x;
     let opponent_x = player_transforms[opponent.index()].position.x;
     is_on_own_side(tagger, tagger_x, midline_x) && is_on_own_side(tagger, opponent_x, midline_x)
@@ -255,14 +250,6 @@ fn is_on_own_side(slot: CtfSlot, x: f32, midline_x: f32) -> bool {
         x < midline_x
     } else {
         x > midline_x
-    }
-}
-
-fn carries_own_flag(slot: CtfSlot, carrier: &CarrierState) -> bool {
-    if slot.is_red() {
-        carrier.red_flag_carrier == Some(slot)
-    } else {
-        carrier.blue_flag_carrier == Some(slot)
     }
 }
 
@@ -443,7 +430,7 @@ mod tests {
     }
 
     #[test]
-    fn own_flag_carrier_can_be_tagged_in_own_territory() {
+    fn own_flag_carrier_in_red_territory_cannot_be_tagged_by_enemy_in_red_territory() {
         let mut world = test_world();
         let refs = world.resource::<EntityRefs>().cloned().expect("refs");
         let red = refs.player(CtfSlot::Red1);
@@ -463,6 +450,34 @@ mod tests {
 
         run_tagging(&mut world);
 
+        // Blue is in Red territory (not own territory), so cannot tag.
+        let red_tf = world.get::<Transform>(red).expect("red");
+        assert_eq!((red_tf.position.x, red_tf.position.y), (320.0, 300.0));
+        let carrier = world.resource::<CarrierState>().expect("carrier");
+        assert_eq!(carrier.red_flag_carrier, Some(CtfSlot::Red1));
+    }
+
+    #[test]
+    fn own_flag_carrier_in_blue_territory_can_be_tagged_by_enemy_in_blue_territory() {
+        let mut world = test_world();
+        let refs = world.resource::<EntityRefs>().cloned().expect("refs");
+        let red = refs.player(CtfSlot::Red1);
+        let blue = refs.player(CtfSlot::Blue1);
+        let mut red_tf = world.get::<Transform>(red).cloned().expect("red");
+        red_tf.position.x = 700.0;
+        red_tf.position.y = 300.0;
+        world.insert(red, red_tf);
+        let mut blue_tf = world.get::<Transform>(blue).cloned().expect("blue");
+        blue_tf.position.x = 720.0;
+        blue_tf.position.y = 300.0;
+        world.insert(blue, blue_tf);
+        world.insert_resource(CarrierState {
+            red_flag_carrier: Some(CtfSlot::Red1),
+            blue_flag_carrier: None,
+        });
+
+        run_tagging(&mut world);
+
         let red_tf = world.get::<Transform>(red).expect("red");
         assert_eq!(
             (red_tf.position.x, red_tf.position.y),
@@ -471,6 +486,6 @@ mod tests {
         let carrier = world.resource::<CarrierState>().expect("carrier");
         assert_eq!(carrier.red_flag_carrier, None);
         let red_flag = world.get::<Transform>(refs.red_flag).expect("red flag");
-        assert_eq!((red_flag.position.x, red_flag.position.y), (320.0, 300.0));
+        assert_eq!((red_flag.position.x, red_flag.position.y), (700.0, 300.0));
     }
 }

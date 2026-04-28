@@ -1,0 +1,32 @@
+src/game/ctf/systems/flag_pickup.rs
+  5c19cd1d5c5bf294 139,157
+src/game/ctf/systems/input.rs
+  5c19cd1d5c5bf294 14-15,134-155,565-622
+src/game/ctf/systems/tagging.rs
+  5c19cd1d5c5bf294 169,433,453-480,489
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "f6a45864bdfce6ecdc7b6b32a256e8390ce15ad8",
+  "prompts": {
+    "5c19cd1d5c5bf294": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "24b2cb34-3e32-45e4-b895-c6b2b0010b0d",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "RM",
+      "messages": [],
+      "total_additions": 156,
+      "total_deletions": 52,
+      "accepted_lines": 153,
+      "overriden_lines": 0
+    }
+  },
+  "humans": {
+    "h_e11066131581f1": {
+      "author": "RM"
+    }
+  }
+}

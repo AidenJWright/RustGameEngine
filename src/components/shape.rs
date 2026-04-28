@@ -10,6 +10,8 @@ pub enum Shape {
     Circle { radius: f32 },
     /// An axis-aligned rectangle.
     Rect { width: f32, height: f32 },
+    /// A filled equilateral triangle rendered inside a square bounding box.
+    Triangle { size: f32 },
 }
 
 impl Component for Shape {}

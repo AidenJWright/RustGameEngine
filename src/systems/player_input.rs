@@ -30,7 +30,9 @@ pub fn config_key_discriminant(key: ConfigKey) -> u32 {
         ConfigKey::A => 5,
         ConfigKey::S => 6,
         ConfigKey::D => 7,
+        ConfigKey::R => 11,
         ConfigKey::Space => 8,
+        ConfigKey::Return => 9,
     }
 }
 

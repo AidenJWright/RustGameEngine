@@ -25,7 +25,7 @@ use forge_ecs::platform::WinitPlatform;
 use forge_ecs::renderer::context::RenderContext;
 use forge_ecs::renderer::draw::{DrawCommand, DrawQueue};
 use forge_ecs::renderer::imgui_layer::ImguiLayer;
-use forge_ecs::renderer::{CirclePipeline, RectPipeline};
+use forge_ecs::renderer::{CirclePipeline, RectPipeline, TrianglePipeline};
 use forge_ecs::components::SinusoidComponent;
 use forge_ecs::systems::SinusoidSystem;
 
@@ -38,6 +38,7 @@ struct DemoState {
     render_ctx: RenderContext,
     circle_pipeline: CirclePipeline,
     rect_pipeline: RectPipeline,
+    triangle_pipeline: TrianglePipeline,
     draw_queue: DrawQueue,
     imgui: ImguiLayer,
     world: World,
@@ -79,6 +80,8 @@ impl ApplicationHandler for DemoApp {
 
         let circle_pipeline = CirclePipeline::new(&render_ctx.device, render_ctx.surface_format);
         let rect_pipeline = RectPipeline::new(&render_ctx.device, render_ctx.surface_format);
+        let triangle_pipeline =
+            TrianglePipeline::new(&render_ctx.device, render_ctx.surface_format);
         let draw_queue = DrawQueue::new();
 
         let imgui = ImguiLayer::new(
@@ -183,6 +186,7 @@ impl ApplicationHandler for DemoApp {
             render_ctx,
             circle_pipeline,
             rect_pipeline,
+            triangle_pipeline,
             draw_queue,
             imgui,
             world,
@@ -276,6 +280,13 @@ fn update(s: &mut DemoState) {
                     height: *height,
                     color: [color.r, color.g, color.b, color.a],
                 },
+                Shape::Triangle { size } => DrawCommand::Triangle {
+                    x: transform.position.x,
+                    y: transform.position.y,
+                    size: *size,
+                    rotation: transform.rotation,
+                    color: [color.r, color.g, color.b, color.a],
+                },
             };
             s.draw_queue.push(cmd);
         });
@@ -301,6 +312,7 @@ fn render(s: &mut DemoState) {
         &mut encoder,
         &s.circle_pipeline,
         &s.rect_pipeline,
+        &s.triangle_pipeline,
         [0.15, 0.15, 0.15, 1.0],
     );
 

@@ -6,7 +6,7 @@ use crate::platform::WinitPlatform;
 use crate::renderer::context::RenderContext;
 use crate::renderer::draw::DrawQueue;
 use crate::renderer::imgui_layer::ImguiLayer;
-use crate::renderer::{CirclePipeline, RectPipeline};
+use crate::renderer::{CirclePipeline, RectPipeline, TrianglePipeline};
 
 /// Owns every piece of shared infrastructure for one window.
 ///
@@ -18,6 +18,7 @@ pub struct AppCore {
     pub render_ctx: RenderContext,
     pub circle_pipeline: CirclePipeline,
     pub rect_pipeline: RectPipeline,
+    pub triangle_pipeline: TrianglePipeline,
     pub draw_queue: DrawQueue,
     pub imgui: ImguiLayer,
 }
@@ -37,6 +38,8 @@ impl AppCore {
 
         let circle_pipeline = CirclePipeline::new(&render_ctx.device, render_ctx.surface_format);
         let rect_pipeline = RectPipeline::new(&render_ctx.device, render_ctx.surface_format);
+        let triangle_pipeline =
+            TrianglePipeline::new(&render_ctx.device, render_ctx.surface_format);
         let draw_queue = DrawQueue::new();
 
         let imgui = ImguiLayer::new(
@@ -56,6 +59,7 @@ impl AppCore {
             render_ctx,
             circle_pipeline,
             rect_pipeline,
+            triangle_pipeline,
             draw_queue,
             imgui,
         })

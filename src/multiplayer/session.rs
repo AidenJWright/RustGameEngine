@@ -6,14 +6,16 @@
 
 use std::collections::VecDeque;
 use std::io;
-use std::net::{SocketAddr, UdpSocket};
+use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 
 use crate::multiplayer::matchmaking::PlayerInfo;
 
 use super::net_types::{
-    DesyncMode, MatchState, NetMessage, NetworkEvent, NetworkPolicy, NetworkTick, PlayerInputFrame,
-    SyncMode,
+    deserialize_relay_packet, serialize_relay_packet, DesyncMode, MatchState, NetMessage,
+    NetworkEvent, NetworkPolicy, NetworkTick, PlayerInputFrame, RelayClientPacket,
+    RelayServerPacket, SyncMode, RELAY_PROTOCOL_VERSION,
 };
+use crate::multiplayer::matchmaking::{CtfSlotAssignment, GameMode, MapSize};
 
 /// Internal role derived from lobby/host-election outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,11 +35,17 @@ pub struct MatchSession {
     local_peer_id: u64,
     host_peer_id: u64,
     players: Vec<PlayerInfo>,
+    game_mode: GameMode,
+    map_size: MapSize,
+    ctf_assignments: Vec<CtfSlotAssignment>,
     shared_seed: u64,
     socket: UdpSocket,
     local_addr: SocketAddr,
-    host_addr: Option<SocketAddr>,
+    relay: crate::multiplayer::matchmaking::RelayConnectInfo,
+    relay_addr: SocketAddr,
     peers: Vec<(u64, SocketAddr)>,
+    outbound_sequence: u64,
+    last_relay_heartbeat_tick: NetworkTick,
     tick: NetworkTick,
     input_queue: VecDeque<PlayerInputFrame>,
     event_queue: VecDeque<NetworkEvent>,
@@ -46,31 +54,26 @@ pub struct MatchSession {
 impl MatchSession {
     /// Start a session from matchmaker state.
     pub fn new(config: NetworkPolicy, state: MatchState, local_peer_id: u64) -> io::Result<Self> {
-        let expected_local_addr = resolve_local_addr(&state, local_peer_id)?;
-        let socket = UdpSocket::bind(expected_local_addr)?;
+        let relay_addr = resolve_relay_addr(&state)?;
+        let bind_addr = if relay_addr.is_ipv4() {
+            "0.0.0.0:0"
+        } else {
+            "[::]:0"
+        };
+        let socket = UdpSocket::bind(bind_addr)?;
         Self::new_with_socket(config, state, local_peer_id, socket)
     }
 
     /// Start a session using a prebound gameplay socket.
     ///
-    /// The socket's local address must match the endpoint advertised to the matchmaker
-    /// for `local_peer_id`.
+    /// The socket only needs outbound UDP access to the relay. It is never
+    /// advertised to other players.
     pub fn new_with_socket(
         config: NetworkPolicy,
         state: MatchState,
         local_peer_id: u64,
         socket: UdpSocket,
     ) -> io::Result<Self> {
-        let expected_local_addr = resolve_local_addr(&state, local_peer_id)?;
-        let actual_local_addr = socket.local_addr()?;
-        if actual_local_addr != expected_local_addr {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "prebound gameplay socket addr mismatch: expected {expected_local_addr}, got {actual_local_addr}"
-                ),
-            ));
-        }
         Self::build_session(config, state, local_peer_id, socket)
     }
 
@@ -99,13 +102,22 @@ impl MatchSession {
             MatchRole::Client
         };
 
+        if state.relay.client_id != local_peer_id {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "relay token belongs to client {}, not local peer {}",
+                    state.relay.client_id, local_peer_id
+                ),
+            ));
+        }
+
         let local_addr = socket.local_addr()?;
-        let endpoints = resolve_endpoints(&state.players)?;
-        let host_addr = state
+        let relay_addr = resolve_relay_addr(&state)?;
+        let _host_player = state
             .players
             .iter()
             .find(|player| player.client_id == state.host_peer_id)
-            .and_then(|player| endpoints.get(&player.client_id).copied())
             .ok_or_else(|| {
                 io::Error::new(io::ErrorKind::NotFound, "host peer id not in player list")
             })?;
@@ -117,33 +129,23 @@ impl MatchSession {
         let peers: Vec<(u64, SocketAddr)> = state
             .players
             .iter()
-            .filter_map(|player| {
-                if player.client_id == local_peer_id {
-                    return None;
-                }
-                endpoints
-                    .get(&player.client_id)
-                    .copied()
-                    .map(|address| (player.client_id, address))
-            })
+            .filter(|player| player.client_id != local_peer_id)
+            .map(|player| (player.client_id, relay_addr))
             .collect();
 
-        let endpoint_summary = endpoints
-            .iter()
-            .map(|(id, addr)| format!("{id}@{addr}"))
-            .collect::<Vec<_>>()
-            .join(", ");
         let peer_summary = peers
             .iter()
             .map(|(id, addr)| format!("{id}@{addr}"))
             .collect::<Vec<_>>()
             .join(", ");
         println!(
-            "session init: local_peer={} role={role:?} host_peer={} local_addr={local_addr} host_addr={host_addr:?} endpoints=[{endpoint_summary}] peers=[{peer_summary}]",
+            "session init: local_peer={} role={role:?} host_peer={} local_addr={local_addr} relay_addr={relay_addr} peers=[{peer_summary}]",
             local_peer_id,
             state.host_peer_id,
             role = role,
         );
+
+        register_with_relay(&socket, relay_addr, &state.relay)?;
 
         Ok(Self {
             role,
@@ -152,11 +154,17 @@ impl MatchSession {
             local_peer_id,
             host_peer_id: state.host_peer_id,
             players: state.players,
+            game_mode: state.game_mode,
+            map_size: state.map_size,
+            ctf_assignments: state.ctf_assignments,
             shared_seed: state.shared_seed,
             socket,
             local_addr,
-            host_addr: Some(host_addr),
+            relay: state.relay,
+            relay_addr,
             peers,
+            outbound_sequence: 0,
+            last_relay_heartbeat_tick: 0,
             tick: state.start_tick,
             input_queue: VecDeque::new(),
             event_queue: VecDeque::new(),
@@ -193,6 +201,26 @@ impl MatchSession {
         &self.players
     }
 
+    /// Game mode selected for this session.
+    pub fn game_mode(&self) -> GameMode {
+        self.game_mode
+    }
+
+    /// CTF slot assignments selected by the lobby host.
+    pub fn ctf_assignments(&self) -> &[CtfSlotAssignment] {
+        &self.ctf_assignments
+    }
+
+    /// CTF arena size selected by the lobby host.
+    pub fn map_size(&self) -> MapSize {
+        self.map_size
+    }
+
+    /// Update the active CTF arena size after an in-match level restart.
+    pub fn set_map_size(&mut self, map_size: MapSize) {
+        self.map_size = map_size;
+    }
+
     /// Current tick counter.
     pub fn current_tick(&self) -> NetworkTick {
         self.tick
@@ -213,9 +241,17 @@ impl MatchSession {
         self.local_addr
     }
 
+    /// Relay address used for all gameplay packets.
+    pub fn relay_addr(&self) -> SocketAddr {
+        self.relay_addr
+    }
+
     /// Address of the host for client peers.
+    ///
+    /// Relay-based sessions do not expose a peer host address, so this returns
+    /// the relay endpoint for compatibility with older call sites.
     pub fn host_addr(&self) -> Option<SocketAddr> {
-        self.host_addr
+        Some(self.relay_addr)
     }
 
     /// List of peers this session is aware of (excluding local peer).
@@ -251,18 +287,20 @@ impl MatchSession {
     /// This advances the authoritative tick counter, drains outbound local inputs,
     /// and applies one non-blocking receive pass for gameplay packets.
     pub fn tick(&mut self) {
+        self.maybe_send_relay_heartbeat();
+
         // Host receives all input frames, clients forward local input to host.
         let frames = self.drain_local_input();
 
         if self.is_host() {
             frames.into_iter().for_each(|frame| {
-                self.send_input_to_peers(frame.clone());
+                self.send_message_to_relay(NetMessage::Input(frame.clone()));
                 self.event_queue
                     .push_back(NetworkEvent::InputReceived(frame));
             });
         } else {
             frames.into_iter().for_each(|frame| {
-                self.send_input_to_host(frame);
+                self.send_message_to_relay(NetMessage::Input(frame));
             });
         }
 
@@ -276,44 +314,21 @@ impl MatchSession {
 
     /// Broadcast a state hash to all peers (host only).
     pub fn broadcast_hash(&mut self, tick: NetworkTick, hash: u64) {
-        let message = NetMessage::HostHash { tick, hash };
-        let payload = encode_message(&message);
-        if let Ok(payload) = payload {
-            self.peers.iter().for_each(|(_, peer_addr)| {
-                let _ = self.socket.send_to(&payload, peer_addr);
-            });
-        }
+        self.send_message_to_relay(NetMessage::HostHash { tick, hash });
     }
 
     /// Send an authoritative correction snapshot to all peers (host only).
     pub fn send_correction(&mut self, tick: NetworkTick, snapshot: super::net_types::Snapshot) {
-        let message = NetMessage::HostCorrection { tick, snapshot };
-        let payload = encode_message(&message);
-        if let Ok(payload) = payload {
-            self.peers.iter().for_each(|(_, peer_addr)| {
-                let _ = self.socket.send_to(&payload, peer_addr);
-            });
-        }
+        self.send_message_to_relay(NetMessage::HostCorrection { tick, snapshot });
     }
 
-    fn send_input_to_host(&mut self, input: PlayerInputFrame) {
-        if let Some(host_addr) = self.host_addr {
-            let message = NetMessage::Input(input);
-            let payload = encode_message(&message);
-            if let Ok(payload) = payload {
-                let _ = self.socket.send_to(&payload, host_addr);
-            }
-        }
-    }
-
-    fn send_input_to_peers(&mut self, input: PlayerInputFrame) {
-        let message = NetMessage::Input(input);
-        let payload = encode_message(&message);
-        if let Ok(payload) = payload {
-            self.peers.iter().for_each(|(_, peer_addr)| {
-                let _ = self.socket.send_to(&payload, peer_addr);
-            });
-        }
+    /// Send an authority-scoped snapshot to all peers.
+    pub fn send_authority_snapshot(
+        &mut self,
+        tick: NetworkTick,
+        snapshot: super::net_types::Snapshot,
+    ) {
+        self.send_message_to_relay(NetMessage::AuthoritySnapshot { tick, snapshot });
     }
 
     fn receive_packets(&mut self) {
@@ -321,26 +336,10 @@ impl MatchSession {
         loop {
             match self.socket.recv_from(&mut buffer) {
                 Ok((size, _from)) => {
-                    if let Ok(message) = decode_message(&buffer[..size]) {
-                        match message {
-                            NetMessage::Input(frame) => {
-                                if self.is_host() {
-                                    self.send_input_to_peers(frame.clone());
-                                }
-                                self.event_queue
-                                    .push_back(NetworkEvent::InputReceived(frame));
-                            }
-                            NetMessage::HostHash { tick, hash } => {
-                                self.event_queue.push_back(NetworkEvent::HostHashReceived {
-                                    tick,
-                                    host_hash: hash,
-                                });
-                            }
-                            NetMessage::HostCorrection { tick, snapshot } => {
-                                self.event_queue
-                                    .push_back(NetworkEvent::CorrectionReceived { tick, snapshot });
-                            }
-                        }
+                    if let Ok(packet) =
+                        deserialize_relay_packet::<RelayServerPacket>(&buffer[..size])
+                    {
+                        self.handle_relay_packet(packet);
                     }
                 }
                 Err(error)
@@ -355,39 +354,132 @@ impl MatchSession {
             }
         }
     }
+
+    fn handle_relay_packet(&mut self, packet: RelayServerPacket) {
+        match packet {
+            RelayServerPacket::Registered { .. } => {}
+            RelayServerPacket::Payload {
+                from_client_id,
+                message,
+                ..
+            } => {
+                if from_client_id == self.local_peer_id {
+                    return;
+                }
+                match message {
+                    NetMessage::Input(frame) => {
+                        self.event_queue
+                            .push_back(NetworkEvent::InputReceived(frame));
+                    }
+                    NetMessage::HostHash { tick, hash } => {
+                        self.event_queue.push_back(NetworkEvent::HostHashReceived {
+                            tick,
+                            host_hash: hash,
+                        });
+                    }
+                    NetMessage::HostCorrection { tick, snapshot } => {
+                        self.event_queue
+                            .push_back(NetworkEvent::CorrectionReceived {
+                                from_peer_id: from_client_id,
+                                tick,
+                                snapshot,
+                            });
+                    }
+                    NetMessage::AuthoritySnapshot { tick, snapshot } => {
+                        self.event_queue
+                            .push_back(NetworkEvent::AuthoritySnapshotReceived {
+                                from_peer_id: from_client_id,
+                                tick,
+                                snapshot,
+                            });
+                    }
+                }
+            }
+            RelayServerPacket::Error { message } => {
+                eprintln!("relay error: {message}");
+            }
+        }
+    }
+
+    fn send_message_to_relay(&mut self, message: NetMessage) {
+        self.outbound_sequence = self.outbound_sequence.wrapping_add(1);
+        let packet = RelayClientPacket::Payload {
+            protocol_version: RELAY_PROTOCOL_VERSION,
+            match_id: self.relay.match_id.clone(),
+            client_id: self.local_peer_id,
+            session_token: self.relay.session_token.clone(),
+            sequence: self.outbound_sequence,
+            message,
+        };
+        self.send_relay_packet(packet);
+    }
+
+    fn maybe_send_relay_heartbeat(&mut self) {
+        let heartbeat_ticks = self
+            .relay
+            .heartbeat_secs
+            .max(1)
+            .saturating_mul(self.config.tick_rate.max(1) as u64)
+            .min(u32::MAX as u64) as NetworkTick;
+        if self.tick != 0
+            && self.tick.wrapping_sub(self.last_relay_heartbeat_tick) < heartbeat_ticks
+        {
+            return;
+        }
+        self.last_relay_heartbeat_tick = self.tick;
+        self.send_relay_packet(RelayClientPacket::Heartbeat {
+            protocol_version: RELAY_PROTOCOL_VERSION,
+            match_id: self.relay.match_id.clone(),
+            client_id: self.local_peer_id,
+            session_token: self.relay.session_token.clone(),
+        });
+    }
+
+    fn send_relay_packet(&self, packet: RelayClientPacket) {
+        if let Ok(payload) = serialize_relay_packet(&packet) {
+            let _ = self.socket.send_to(&payload, self.relay_addr);
+        }
+    }
 }
 
-fn encode_message(message: &NetMessage) -> io::Result<Vec<u8>> {
-    bincode::serialize(message).map_err(io::Error::other)
-}
-
-fn decode_message(bytes: &[u8]) -> io::Result<NetMessage> {
-    bincode::deserialize(bytes).map_err(io::Error::other)
-}
-
-fn resolve_local_addr(state: &MatchState, local_peer_id: u64) -> io::Result<SocketAddr> {
-    let endpoints = resolve_endpoints(&state.players)?;
+fn resolve_relay_addr(state: &MatchState) -> io::Result<SocketAddr> {
     state
-        .players
-        .iter()
-        .find(|player| player.client_id == local_peer_id)
-        .and_then(|player| endpoints.get(&player.client_id).copied())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "local peer id not in player list"))
+        .relay
+        .udp_endpoint
+        .to_socket_addrs()
+        .map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!(
+                    "relay endpoint '{}' could not be resolved; expected host:port like 136.118.42.95:7001: {error}",
+                    state.relay.udp_endpoint
+                ),
+            )
+        })?
+        .next()
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "relay endpoint '{}' did not resolve; expected host:port like 136.118.42.95:7001",
+                    state.relay.udp_endpoint
+                ),
+            )
+        })
 }
 
-fn resolve_endpoints(
-    players: &[PlayerInfo],
-) -> io::Result<std::collections::HashMap<u64, SocketAddr>> {
-    players
-        .iter()
-        .map(|player| {
-            let addr = player.game_addr.parse::<SocketAddr>().map_err(|error| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("invalid game_addr '{}': {error}", player.game_addr),
-                )
-            })?;
-            Ok((player.client_id, addr))
-        })
-        .collect()
+fn register_with_relay(
+    socket: &UdpSocket,
+    relay_addr: SocketAddr,
+    relay: &crate::multiplayer::matchmaking::RelayConnectInfo,
+) -> io::Result<()> {
+    let packet = RelayClientPacket::Register {
+        protocol_version: RELAY_PROTOCOL_VERSION,
+        match_id: relay.match_id.clone(),
+        client_id: relay.client_id,
+        session_token: relay.session_token.clone(),
+    };
+    let payload = serialize_relay_packet(&packet)?;
+    let _ = socket.send_to(&payload, relay_addr)?;
+    Ok(())
 }

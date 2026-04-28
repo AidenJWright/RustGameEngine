@@ -1,10 +1,41 @@
 //! imgui integration layer — wraps imgui-rs, imgui-wgpu, and imgui-winit-support.
 
-use imgui::Context;
+use imgui::{ClipboardBackend, Context};
 use imgui_wgpu::{Renderer, RendererConfig};
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
 use wgpu::{CommandEncoder, Device, Queue, StoreOp, TextureFormat};
 use winit::{event::Event, window::Window};
+
+struct SystemClipboard {
+    clipboard: Option<arboard::Clipboard>,
+}
+
+impl SystemClipboard {
+    fn new() -> Self {
+        Self {
+            clipboard: arboard::Clipboard::new().ok(),
+        }
+    }
+
+    fn clipboard(&mut self) -> Option<&mut arboard::Clipboard> {
+        if self.clipboard.is_none() {
+            self.clipboard = arboard::Clipboard::new().ok();
+        }
+        self.clipboard.as_mut()
+    }
+}
+
+impl ClipboardBackend for SystemClipboard {
+    fn get(&mut self) -> Option<String> {
+        self.clipboard()?.get_text().ok()
+    }
+
+    fn set(&mut self, value: &str) {
+        if let Some(clipboard) = self.clipboard() {
+            let _ = clipboard.set_text(value.to_owned());
+        }
+    }
+}
 
 /// Holds all imgui state and provides a two-step frame API.
 ///
@@ -26,6 +57,7 @@ impl ImguiLayer {
     pub fn new(window: &Window, device: &Device, queue: &Queue, format: TextureFormat) -> Self {
         let mut ctx = Context::create();
         ctx.set_ini_filename(None); // disable imgui.ini persistence
+        ctx.set_clipboard_backend(SystemClipboard::new());
         ctx.io_mut().config_flags |= imgui::ConfigFlags::DOCKING_ENABLE;
 
         let mut platform = WinitPlatform::new(&mut ctx);

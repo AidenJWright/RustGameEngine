@@ -20,6 +20,7 @@ use crate::editor::EditorState;
 use crate::messaging::MessageBus;
 use crate::renderer::draw::DrawCommand;
 use crate::scene::{load_scene, save_scene};
+use rfd;
 
 use super::core::AppCore;
 use super::game_runner::make_draw_cmd;
@@ -126,27 +127,37 @@ impl EditorRunner {
 
         // --- 3. Clone component data for inspector (avoids mid-UI borrows) ---
         let selected = self.state.selected_entity;
-        let (mut new_transform, mut new_color, mut new_sinusoid, mut new_player_input, mut new_spawn_points) =
+        let (
+            mut new_transform,
+            mut new_color,
+            mut new_shape,
+            mut new_sinusoid,
+            mut new_player_input,
+            mut new_spawn_points,
+        ) =
             if let Some(e) = selected {
                 (
                     core.world.get::<Transform>(e).cloned(),
                     core.world.get::<Color>(e).cloned(),
+                    core.world.get::<Shape>(e).cloned(),
                     core.world.get::<SinusoidComponent>(e).cloned(),
                     core.world.get::<PlayerInput>(e).cloned(),
                     core.world.get::<SpawnPoints>(e).cloned(),
                 )
             } else {
-                (None, None, None, None, None)
+                (None, None, None, None, None, None)
             };
 
         // --- 4. Action flags collected during UI ---
         let mut new_selected = selected;
         let mut transform_changed = false;
         let mut color_changed = false;
+        let mut shape_changed = false;
         let mut sinusoid_changed = false;
         let mut player_input_changed = false;
         let mut spawn_points_changed = false;
         let mut remove_color = false;
+        let mut remove_shape = false;
         let mut remove_sinusoid = false;
         let mut remove_player_input = false;
         let mut remove_spawn_points = false;
@@ -180,6 +191,7 @@ impl EditorRunner {
             &mut encoder,
             &core.circle_pipeline,
             &core.rect_pipeline,
+            &core.triangle_pipeline,
             [0.08, 0.08, 0.12, 1.0],
         );
 
@@ -366,6 +378,58 @@ impl EditorRunner {
                             }
                             if ui.small_button("Remove##rm_col") {
                                 remove_color = true;
+                            }
+                            ui.separator();
+                        }
+
+                        // --- Shape ---
+                        if let Some(ref mut shape) = new_shape {
+                            ui.text("[ Shape ]");
+                            let shape_labels = ["Circle", "Rect", "Triangle"];
+                            let mut shape_index = match shape {
+                                Shape::Circle { .. } => 0,
+                                Shape::Rect { .. } => 1,
+                                Shape::Triangle { .. } => 2,
+                            };
+                            if ui.combo_simple_string("Type##shape", &mut shape_index, &shape_labels) {
+                                *shape = match shape_index {
+                                    0 => Shape::Circle { radius: 50.0 },
+                                    1 => Shape::Rect {
+                                        width: 100.0,
+                                        height: 100.0,
+                                    },
+                                    _ => Shape::Triangle { size: 80.0 },
+                                };
+                                shape_changed = true;
+                            }
+
+                            match shape {
+                                Shape::Circle { radius } => {
+                                    if ui.input_float("radius##shape", radius).build() {
+                                        shape_changed = true;
+                                    }
+                                }
+                                Shape::Rect { width, height } => {
+                                    if ui.input_float("width##shape", width).build() {
+                                        shape_changed = true;
+                                    }
+                                    if ui.input_float("height##shape", height).build() {
+                                        shape_changed = true;
+                                    }
+                                }
+                                Shape::Triangle { size } => {
+                                    if ui.input_float("size##shape", size).build() {
+                                        shape_changed = true;
+                                    }
+                                }
+                            }
+
+                            let shape_systems = systems_for("Shape");
+                            if !shape_systems.is_empty() {
+                                ui.text_disabled(format!("  Used by: {shape_systems}"));
+                            }
+                            if ui.small_button("Remove##rm_shape") {
+                                remove_shape = true;
                             }
                             ui.separator();
                         }
@@ -602,6 +666,14 @@ impl EditorRunner {
                 }
             }
 
+            if remove_shape {
+                core.world.remove::<Shape>(entity);
+            } else if shape_changed {
+                if let Some(shape) = new_shape {
+                    core.world.insert(entity, shape);
+                }
+            }
+
             if remove_sinusoid {
                 core.world.remove::<SinusoidComponent>(entity);
             } else if sinusoid_changed {
@@ -652,16 +724,45 @@ impl EditorRunner {
         }
 
         if save_req {
-            match save_scene(&core.world, &self.state.scene_path) {
-                Ok(()) => self.state.status_message = format!("Saved → {}", self.state.scene_path),
-                Err(e) => self.state.status_message = format!("Save error: {e}"),
+            let current = std::path::Path::new(&self.state.scene_path);
+            let mut dialog = rfd::FileDialog::new()
+                .add_filter("Scene JSON", &["json"])
+                .set_file_name(
+                    current
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("scene.json"),
+                );
+            if let Some(dir) = current.parent().filter(|d| d != &std::path::Path::new("")) {
+                dialog = dialog.set_directory(dir);
+            }
+            if let Some(path) = dialog.save_file() {
+                let path_str = path.to_string_lossy().into_owned();
+                match save_scene(&core.world, &path_str) {
+                    Ok(()) => {
+                        self.state.status_message = format!("Saved → {path_str}");
+                        self.state.scene_path = path_str;
+                    }
+                    Err(e) => self.state.status_message = format!("Save error: {e}"),
+                }
             }
         }
 
         if load_req {
-            match load_scene(&mut core.world, &self.state.scene_path) {
-                Ok(()) => self.state.status_message = format!("Loaded ← {}", self.state.scene_path),
-                Err(e) => self.state.status_message = format!("Load error: {e}"),
+            let current = std::path::Path::new(&self.state.scene_path);
+            let mut dialog = rfd::FileDialog::new().add_filter("Scene JSON", &["json"]);
+            if let Some(dir) = current.parent().filter(|d| d != &std::path::Path::new("")) {
+                dialog = dialog.set_directory(dir);
+            }
+            if let Some(path) = dialog.pick_file() {
+                let path_str = path.to_string_lossy().into_owned();
+                match load_scene(&mut core.world, &path_str) {
+                    Ok(()) => {
+                        self.state.status_message = format!("Loaded ← {path_str}");
+                        self.state.scene_path = path_str;
+                    }
+                    Err(e) => self.state.status_message = format!("Load error: {e}"),
+                }
             }
         }
     }

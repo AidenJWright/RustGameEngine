@@ -28,6 +28,7 @@ pub mod app;
 pub mod components;
 pub mod ecs;
 pub mod editor;
+pub mod game;
 pub mod math;
 pub mod messaging;
 pub mod multiplayer;

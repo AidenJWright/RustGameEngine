@@ -5,6 +5,7 @@
 
 use super::component::Component;
 use super::entity::Entity;
+use super::resource::Resource;
 
 // ---------------------------------------------------------------------------
 // Internal command enum
@@ -22,6 +23,8 @@ enum Command {
         entity: Entity,
         applier: Box<dyn FnOnce(&mut crate::ecs::world::World)>,
     },
+    /// Insert or replace a world resource.
+    InsertResource(Box<dyn FnOnce(&mut crate::ecs::world::World)>),
     /// Remove a component from an existing entity.
     RemoveComponent {
         #[allow(dead_code)]
@@ -70,6 +73,14 @@ impl CommandBuffer {
         });
     }
 
+    /// Queue inserting or replacing a singleton resource.
+    pub fn insert_resource<T: Resource>(&mut self, resource: T) {
+        self.commands
+            .push(Command::InsertResource(Box::new(move |world| {
+                world.insert_resource(resource);
+            })));
+    }
+
     /// Queue removing component `T` from `entity`.
     pub fn remove<T: Component>(&mut self, entity: Entity) {
         self.commands.push(Command::RemoveComponent {
@@ -90,6 +101,7 @@ impl CommandBuffer {
                 world.despawn(e);
             }
             Command::InsertComponent { applier, .. } => applier(world),
+            Command::InsertResource(applier) => applier(world),
             Command::RemoveComponent { remover, .. } => remover(world),
         });
     }

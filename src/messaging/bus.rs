@@ -39,7 +39,7 @@ impl MessageBus {
         });
     }
 
-    fn dispatch_phase(&self, phase: &LoopPhase, world: &World, commands: &mut CommandBuffer) {
+    fn dispatch_phase(&self, phase: &LoopPhase, world: &mut World) {
         let mut indices: Vec<usize> = self
             .handlers
             .iter()
@@ -49,19 +49,19 @@ impl MessageBus {
             .collect();
         indices.sort_by_key(|&i| self.handlers[i].priority);
         for i in indices {
-            self.handlers[i].system.run(world, commands);
+            let mut commands = CommandBuffer::new();
+            self.handlers[i].system.run(world, &mut commands);
+            commands.flush(world);
         }
     }
 
     /// Run one full frame: `First`, then `Update`, then `Last`.
     ///
-    /// The [`CommandBuffer`] is flushed after each phase so that mutations
-    /// applied in `First` are visible to `Update` systems, etc.
+    /// Each system gets a fresh [`CommandBuffer`] that is flushed immediately
+    /// after that system runs, so priority ordering can express dependencies.
     pub fn run_frame(&self, world: &mut World) {
         for phase in [LoopPhase::First, LoopPhase::Update, LoopPhase::Last] {
-            let mut cmds = CommandBuffer::new();
-            self.dispatch_phase(&phase, world, &mut cmds);
-            cmds.flush(world);
+            self.dispatch_phase(&phase, world);
         }
     }
 }

@@ -20,6 +20,7 @@ use crate::editor::EditorState;
 use crate::messaging::MessageBus;
 use crate::renderer::draw::DrawCommand;
 use crate::scene::{load_scene, save_scene};
+use rfd;
 
 use super::core::AppCore;
 use super::game_runner::make_draw_cmd;
@@ -723,16 +724,45 @@ impl EditorRunner {
         }
 
         if save_req {
-            match save_scene(&core.world, &self.state.scene_path) {
-                Ok(()) => self.state.status_message = format!("Saved → {}", self.state.scene_path),
-                Err(e) => self.state.status_message = format!("Save error: {e}"),
+            let current = std::path::Path::new(&self.state.scene_path);
+            let mut dialog = rfd::FileDialog::new()
+                .add_filter("Scene JSON", &["json"])
+                .set_file_name(
+                    current
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("scene.json"),
+                );
+            if let Some(dir) = current.parent().filter(|d| d != &std::path::Path::new("")) {
+                dialog = dialog.set_directory(dir);
+            }
+            if let Some(path) = dialog.save_file() {
+                let path_str = path.to_string_lossy().into_owned();
+                match save_scene(&core.world, &path_str) {
+                    Ok(()) => {
+                        self.state.status_message = format!("Saved → {path_str}");
+                        self.state.scene_path = path_str;
+                    }
+                    Err(e) => self.state.status_message = format!("Save error: {e}"),
+                }
             }
         }
 
         if load_req {
-            match load_scene(&mut core.world, &self.state.scene_path) {
-                Ok(()) => self.state.status_message = format!("Loaded ← {}", self.state.scene_path),
-                Err(e) => self.state.status_message = format!("Load error: {e}"),
+            let current = std::path::Path::new(&self.state.scene_path);
+            let mut dialog = rfd::FileDialog::new().add_filter("Scene JSON", &["json"]);
+            if let Some(dir) = current.parent().filter(|d| d != &std::path::Path::new("")) {
+                dialog = dialog.set_directory(dir);
+            }
+            if let Some(path) = dialog.pick_file() {
+                let path_str = path.to_string_lossy().into_owned();
+                match load_scene(&mut core.world, &path_str) {
+                    Ok(()) => {
+                        self.state.status_message = format!("Loaded ← {path_str}");
+                        self.state.scene_path = path_str;
+                    }
+                    Err(e) => self.state.status_message = format!("Load error: {e}"),
+                }
             }
         }
     }

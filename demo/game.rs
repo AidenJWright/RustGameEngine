@@ -456,7 +456,7 @@ impl LauncherRuntime {
             matchmaker_input: default_matchmaker,
             join_code_input: String::new(),
             target_players: 2,
-            game_mode: GameMode::DefaultScene,
+            game_mode: GameMode::CaptureTheFlag,
             map_size: MapSize::Small,
             status_message: "Enter username and matchmaker address.".to_string(),
             error_message: String::new(),

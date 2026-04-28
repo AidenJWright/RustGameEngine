@@ -40,6 +40,7 @@ imgui-wgpu = "0.25"
 imgui-winit-support = "0.13"
 bytemuck = { version = "1.14", features = ["derive"] }
 pollster = "0.3"
+rfd = { version = "0.15", default-features = false, features = ["gtk3"] }
 
 [[bin]]
 name = "gen_ctf_arenas"

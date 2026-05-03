@@ -1,0 +1,76 @@
+assets/ctf_arena_medium.json
+  d24941c994755e1d 3572-3582,3616-3626,3660-3670,3704-3714,3748-3758,3792-3802,3836-3846,3880-3890
+src/game/ctf/setup.rs
+  d24941c994755e1d 3,40,170-179,198,202-229,247-265,301-313
+assets/ctf_arena_small.json
+  d24941c994755e1d 3392-3402,3436-3446,3480-3490,3524-3534,3568-3578,3612-3622,3656-3666,3700-3710
+src/app/editor_runner.rs
+  0cd7c7a532bfa858 473,523-524,529-530,537
+  f8ddd36808c10d05 19,21,24-25,106-108,135-137,145-156,160,215-242,248-249,251-254,277-287,345-346,356-360,378-400,403-421,424-431,433-446,448-453,455-461,463-466,470-472,474-477,480-502,505-507,509-512,514-517,519-522,525-528,531,533-536,538-545,547-549,551-558,561-584,587-588,591-592,594-597,600-604,606-608,611-615,617-631,635-638,643,645,647-709,711,713,760-767,872,876-877,892-943
+assets/ctf_arena_large.json
+  d24941c994755e1d 3752-3762,3796-3806,3840-3850,3884-3894,3928-3938,3972-3982,4016-4026,4060-4070
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "7e87249276002480890b797955fa8655007537cc",
+  "prompts": {
+    "0cd7c7a532bfa858": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019dd1c9-9deb-7f62-ab70-11a3bd276fe7",
+        "model": "gpt-5.5"
+      },
+      "human_author": "RM",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 15,
+      "overriden_lines": 0
+    },
+    "5bcfe462b64dc868": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019deb17-c543-7091-8143-c7af7522c351",
+        "model": "unknown"
+      },
+      "human_author": "RM",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "d24941c994755e1d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019deb23-287b-7190-b2c4-e9ba25f3c75e",
+        "model": "gpt-5.5"
+      },
+      "human_author": "RM",
+      "messages": [],
+      "total_additions": 373,
+      "total_deletions": 31,
+      "accepted_lines": 356,
+      "overriden_lines": 4
+    },
+    "f8ddd36808c10d05": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019deb17-c4d5-7903-bdc2-670612b30133",
+        "model": "gpt-5.5"
+      },
+      "human_author": "RM",
+      "messages": [],
+      "total_additions": 500,
+      "total_deletions": 331,
+      "accepted_lines": 435,
+      "overriden_lines": 0
+    }
+  },
+  "humans": {
+    "h_e11066131581f1": {
+      "author": "RM"
+    }
+  }
+}

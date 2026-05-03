@@ -3749,6 +3749,17 @@
       },
       "id": 126,
       "parent": 0,
+      "player_input": {
+        "horizontal": {
+          "negative": "A",
+          "positive": "D"
+        },
+        "speed": 330.0,
+        "vertical": {
+          "negative": "W",
+          "positive": "S"
+        }
+      },
       "shape": {
         "Triangle": {
           "size": 40.0
@@ -3782,6 +3793,17 @@
       },
       "id": 127,
       "parent": 0,
+      "player_input": {
+        "horizontal": {
+          "negative": "A",
+          "positive": "D"
+        },
+        "speed": 330.0,
+        "vertical": {
+          "negative": "W",
+          "positive": "S"
+        }
+      },
       "shape": {
         "Triangle": {
           "size": 40.0
@@ -3815,6 +3837,17 @@
       },
       "id": 128,
       "parent": 0,
+      "player_input": {
+        "horizontal": {
+          "negative": "A",
+          "positive": "D"
+        },
+        "speed": 330.0,
+        "vertical": {
+          "negative": "W",
+          "positive": "S"
+        }
+      },
       "shape": {
         "Triangle": {
           "size": 40.0
@@ -3848,6 +3881,17 @@
       },
       "id": 129,
       "parent": 0,
+      "player_input": {
+        "horizontal": {
+          "negative": "A",
+          "positive": "D"
+        },
+        "speed": 330.0,
+        "vertical": {
+          "negative": "W",
+          "positive": "S"
+        }
+      },
       "shape": {
         "Triangle": {
           "size": 40.0
@@ -3881,6 +3925,17 @@
       },
       "id": 130,
       "parent": 0,
+      "player_input": {
+        "horizontal": {
+          "negative": "ArrowLeft",
+          "positive": "ArrowRight"
+        },
+        "speed": 330.0,
+        "vertical": {
+          "negative": "ArrowUp",
+          "positive": "ArrowDown"
+        }
+      },
       "shape": {
         "Triangle": {
           "size": 40.0
@@ -3914,6 +3969,17 @@
       },
       "id": 131,
       "parent": 0,
+      "player_input": {
+        "horizontal": {
+          "negative": "ArrowLeft",
+          "positive": "ArrowRight"
+        },
+        "speed": 330.0,
+        "vertical": {
+          "negative": "ArrowUp",
+          "positive": "ArrowDown"
+        }
+      },
       "shape": {
         "Triangle": {
           "size": 40.0
@@ -3947,6 +4013,17 @@
       },
       "id": 132,
       "parent": 0,
+      "player_input": {
+        "horizontal": {
+          "negative": "ArrowLeft",
+          "positive": "ArrowRight"
+        },
+        "speed": 330.0,
+        "vertical": {
+          "negative": "ArrowUp",
+          "positive": "ArrowDown"
+        }
+      },
       "shape": {
         "Triangle": {
           "size": 40.0
@@ -3980,6 +4057,17 @@
       },
       "id": 133,
       "parent": 0,
+      "player_input": {
+        "horizontal": {
+          "negative": "ArrowLeft",
+          "positive": "ArrowRight"
+        },
+        "speed": 330.0,
+        "vertical": {
+          "negative": "ArrowUp",
+          "positive": "ArrowDown"
+        }
+      },
       "shape": {
         "Triangle": {
           "size": 40.0

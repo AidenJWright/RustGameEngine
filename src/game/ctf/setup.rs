@@ -1,6 +1,6 @@
 //! Scene-backed CTF setup helpers.
 
-use crate::components::{Camera, Shape, Tag, Transform, Velocity};
+use crate::components::{Camera, PlayerInput, Shape, Tag, Transform, Velocity};
 use crate::ecs::entity::Entity;
 use crate::ecs::world::World;
 use crate::game::ctf::components::{Flag, PlayerMarker, TeamRestrictedZone, Wall};
@@ -37,6 +37,7 @@ pub fn setup_ctf_scene_entities(
 
     attach_wall_components(world);
     attach_team_restricted_zones(world);
+    require_saved_player_inputs(world, &players);
     require_saved_camera(world);
 
     let refs = EntityRefs {
@@ -166,6 +167,16 @@ fn require_saved_camera(world: &World) {
     );
 }
 
+fn require_saved_player_inputs(world: &World, players: &[Entity; CtfSlot::COUNT]) {
+    for slot in CtfSlot::ALL {
+        assert!(
+            world.get::<PlayerInput>(players[slot.index()]).is_some(),
+            "{} must have a PlayerInput component in the saved scene",
+            slot.tag()
+        );
+    }
+}
+
 fn find_tag(world: &World, needle: &str) -> Entity {
     world
         .query::<Tag>()
@@ -184,10 +195,38 @@ fn transform_xy(world: &World, entity: Entity) -> (f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::{ConfigKey, PlayerInput};
     use crate::scene::reload_scene;
 
     #[test]
-    fn resolves_scene_authored_ctf_entities() {
+    fn resolves_scene_authored_ctf_entities_for_all_maps() {
+        for map_size in MapSize::ALL {
+            let mut world = World::new();
+            reload_scene(&mut world, map_size.scene_path()).expect("load CTF scene");
+            setup_ctf_scene_entities(
+                &mut world,
+                &[
+                    CtfSlotAssignment {
+                        client_id: 1,
+                        primary_slot: CtfSlot::Red1,
+                    },
+                    CtfSlotAssignment {
+                        client_id: 2,
+                        primary_slot: CtfSlot::Blue1,
+                    },
+                ],
+                map_size,
+            );
+
+            assert_eq!(world.query::<PlayerMarker>().count(), 8);
+            assert_eq!(world.query::<Flag>().count(), 2);
+            assert!(world.query::<Wall>().count() >= 16);
+            assert_eq!(world.query::<Camera>().count(), 1);
+        }
+    }
+
+    #[test]
+    fn saved_ctf_players_include_player_input_bindings() {
         let mut world = World::new();
         reload_scene(&mut world, "assets/ctf_arena_small.json").expect("load CTF scene");
         setup_ctf_scene_entities(
@@ -205,10 +244,25 @@ mod tests {
             MapSize::Small,
         );
 
-        assert_eq!(world.query::<PlayerMarker>().count(), 8);
-        assert_eq!(world.query::<Flag>().count(), 2);
-        assert_eq!(world.query::<Wall>().count(), 16);
-        assert_eq!(world.query::<Camera>().count(), 1);
+        assert_eq!(world.query::<PlayerInput>().count(), CtfSlot::COUNT);
+        assert_player_input(
+            world
+                .get::<PlayerInput>(find_tag(&world, "ctf_player_red_1"))
+                .expect("red input"),
+            ConfigKey::A,
+            ConfigKey::D,
+            ConfigKey::W,
+            ConfigKey::S,
+        );
+        assert_player_input(
+            world
+                .get::<PlayerInput>(find_tag(&world, "ctf_player_blue_1"))
+                .expect("blue input"),
+            ConfigKey::ArrowLeft,
+            ConfigKey::ArrowRight,
+            ConfigKey::ArrowUp,
+            ConfigKey::ArrowDown,
+        );
     }
 
     #[test]
@@ -243,5 +297,19 @@ mod tests {
             vec![CtfSlot::Red1, CtfSlot::Red2, CtfSlot::Red3, CtfSlot::Red4]
         );
         assert_eq!(blue.owned_slots, vec![CtfSlot::Blue1, CtfSlot::Blue2]);
+    }
+
+    fn assert_player_input(
+        input: &PlayerInput,
+        left: ConfigKey,
+        right: ConfigKey,
+        up: ConfigKey,
+        down: ConfigKey,
+    ) {
+        assert_eq!(input.horizontal.negative, left);
+        assert_eq!(input.horizontal.positive, right);
+        assert_eq!(input.vertical.negative, up);
+        assert_eq!(input.vertical.positive, down);
+        assert_eq!(input.speed, crate::game::ctf::PLAYER_SPEED);
     }
 }

@@ -16,10 +16,13 @@ use crate::components::{
 use crate::ecs::entity::Entity;
 use crate::ecs::resource::{DeltaTime, ElapsedTime};
 use crate::ecs::world::World;
+use crate::editor::state::{EditorWindowRect, SceneEntityDrag};
 use crate::editor::EditorState;
+use crate::math::Vec2;
 use crate::messaging::MessageBus;
 use crate::renderer::draw::DrawCommand;
-use crate::scene::{load_scene, save_scene};
+use crate::scene::{reload_scene, save_scene};
+use imgui::{MouseButton, WindowHoveredFlags};
 use rfd;
 
 use super::core::AppCore;
@@ -100,7 +103,9 @@ impl EditorRunner {
             .query3::<Transform, Shape, Color>()
             .map(|(_, t, s, c)| {
                 let raw = make_draw_cmd(t, s, c); // world-origin coords
-                self.state.camera.transform_draw_cmd(raw, viewport_w, viewport_h)
+                self.state
+                    .camera
+                    .transform_draw_cmd(raw, viewport_w, viewport_h)
             })
             .collect();
         for cmd in draw_cmds {
@@ -127,6 +132,9 @@ impl EditorRunner {
 
         // --- 3. Clone component data for inspector (avoids mid-UI borrows) ---
         let selected = self.state.selected_entity;
+        let mut new_tag = selected
+            .and_then(|e| core.world.get::<Tag>(e).map(|t| t.0.clone()))
+            .unwrap_or_default();
         let (
             mut new_transform,
             mut new_color,
@@ -134,22 +142,22 @@ impl EditorRunner {
             mut new_sinusoid,
             mut new_player_input,
             mut new_spawn_points,
-        ) =
-            if let Some(e) = selected {
-                (
-                    core.world.get::<Transform>(e).cloned(),
-                    core.world.get::<Color>(e).cloned(),
-                    core.world.get::<Shape>(e).cloned(),
-                    core.world.get::<SinusoidComponent>(e).cloned(),
-                    core.world.get::<PlayerInput>(e).cloned(),
-                    core.world.get::<SpawnPoints>(e).cloned(),
-                )
-            } else {
-                (None, None, None, None, None, None)
-            };
+        ) = if let Some(e) = selected {
+            (
+                core.world.get::<Transform>(e).cloned(),
+                core.world.get::<Color>(e).cloned(),
+                core.world.get::<Shape>(e).cloned(),
+                core.world.get::<SinusoidComponent>(e).cloned(),
+                core.world.get::<PlayerInput>(e).cloned(),
+                core.world.get::<SpawnPoints>(e).cloned(),
+            )
+        } else {
+            (None, None, None, None, None, None)
+        };
 
         // --- 4. Action flags collected during UI ---
         let mut new_selected = selected;
+        let mut tag_changed = false;
         let mut transform_changed = false;
         let mut color_changed = false;
         let mut shape_changed = false;
@@ -204,28 +212,46 @@ impl EditorRunner {
             let display_h = ui.io().display_size[1];
 
             let editor_panel_bg_alpha = 0.62_f32;
-            let editor_window_pos = if self.state.editor_window_maximized {
-                [0.0, 0.0]
-            } else {
-                [16.0, 16.0]
-            };
-            let editor_window_size = if self.state.editor_window_maximized {
-                [display_w, display_h]
-            } else {
-                [520.0, (display_h - 32.0).min(560.0).max(240.0)]
-            };
-            let editor_window_condition = if self.state.editor_window_maximized {
-                imgui::Condition::Always
-            } else {
-                imgui::Condition::FirstUseEver
-            };
+            let default_editor_window_pos = [16.0, 16.0];
+            let default_editor_window_size = [520.0, (display_h - 32.0).min(560.0).max(240.0)];
+            let restoring_editor_window =
+                self.state.editor_window_restore_pending && !self.state.editor_window_maximized;
+            let (editor_window_pos, editor_window_size, editor_window_condition) =
+                if self.state.editor_window_maximized {
+                    ([0.0, 0.0], [display_w, display_h], imgui::Condition::Always)
+                } else if restoring_editor_window {
+                    let rect = self
+                        .state
+                        .editor_window_restore_rect
+                        .unwrap_or(EditorWindowRect {
+                            pos: default_editor_window_pos,
+                            size: default_editor_window_size,
+                        });
+                    (rect.pos, rect.size, imgui::Condition::Always)
+                } else {
+                    (
+                        default_editor_window_pos,
+                        default_editor_window_size,
+                        imgui::Condition::FirstUseEver,
+                    )
+                };
+            let mut editor_window_flags =
+                imgui::WindowFlags::NO_SAVED_SETTINGS | imgui::WindowFlags::NO_DOCKING;
+            if self.state.editor_window_maximized {
+                editor_window_flags |= imgui::WindowFlags::NO_MOVE | imgui::WindowFlags::NO_RESIZE;
+            }
 
             ui.window("Editor")
                 .bg_alpha(editor_panel_bg_alpha)
                 .position(editor_window_pos, editor_window_condition)
                 .size(editor_window_size, editor_window_condition)
-                .flags(imgui::WindowFlags::NO_SAVED_SETTINGS | imgui::WindowFlags::NO_DOCKING)
+                .size_constraints([360.0, 240.0], [display_w.max(360.0), display_h.max(240.0)])
+                .flags(editor_window_flags)
                 .build(|| {
+                    if restoring_editor_window {
+                        self.state.editor_window_restore_pending = false;
+                    }
+
                     if ui.button("Save") {
                         save_req = true;
                     }
@@ -248,7 +274,17 @@ impl EditorRunner {
                         "Maximize"
                     };
                     if ui.button(maximize_label) {
-                        self.state.editor_window_maximized = !self.state.editor_window_maximized;
+                        if self.state.editor_window_maximized {
+                            self.state.editor_window_maximized = false;
+                            self.state.editor_window_restore_pending = true;
+                        } else {
+                            self.state.editor_window_restore_rect = Some(EditorWindowRect {
+                                pos: ui.window_pos(),
+                                size: ui.window_size(),
+                            });
+                            self.state.editor_window_maximized = true;
+                            self.state.editor_window_restore_pending = false;
+                        }
                     }
                     ui.same_line();
                     ui.text(format!("  Scene: {}", self.state.scene_path));
@@ -306,10 +342,8 @@ impl EditorRunner {
                                     imgui::DragDropFlags::empty(),
                                 ) {
                                     let raw = payload.data;
-                                    let dragged = Entity::new(
-                                        (raw & 0xFFFF_FFFF) as u32,
-                                        (raw >> 32) as u32,
-                                    );
+                                    let dragged =
+                                        Entity::new((raw & 0xFFFF_FFFF) as u32, (raw >> 32) as u32);
                                     detach_req = Some(dragged);
                                 }
                             }
@@ -318,6 +352,11 @@ impl EditorRunner {
                         if let Some(_tab) = ui.tab_item("Inspector") {
                             if let Some(entity) = selected {
                                 ui.text(format!("{entity}"));
+                                ui.separator();
+                                ui.text("[ Tag ]");
+                                if ui.input_text("tag##entity_tag", &mut new_tag).build() {
+                                    tag_changed = true;
+                                }
                                 ui.separator();
                             } else {
                                 ui.text_disabled("No entity selected.");
@@ -336,279 +375,345 @@ impl EditorRunner {
                                 names.join(", ")
                             };
 
-                        // --- Transform (guaranteed, cannot be removed) ---
-                        if let Some(ref mut tf) = new_transform {
-                            ui.text("[ Transform ]");
-                            if ui.input_float("px##tf", &mut tf.position.x).build() {
-                                transform_changed = true;
+                            // --- Transform (guaranteed, cannot be removed) ---
+                            if let Some(ref mut tf) = new_transform {
+                                ui.text("[ Transform ]");
+                                if ui.input_float("px##tf", &mut tf.position.x).build() {
+                                    transform_changed = true;
+                                }
+                                if ui.input_float("py##tf", &mut tf.position.y).build() {
+                                    transform_changed = true;
+                                }
+                                if ui.input_float("rot##tf", &mut tf.rotation).build() {
+                                    transform_changed = true;
+                                }
+                                if ui.input_float("sx##tf", &mut tf.scale.x).build() {
+                                    transform_changed = true;
+                                }
+                                if ui.input_float("sy##tf", &mut tf.scale.y).build() {
+                                    transform_changed = true;
+                                }
+                                let tf_systems = systems_for("Transform");
+                                if !tf_systems.is_empty() {
+                                    ui.text_disabled(format!("  Used by: {tf_systems}"));
+                                }
+                                ui.separator();
                             }
-                            if ui.input_float("py##tf", &mut tf.position.y).build() {
-                                transform_changed = true;
-                            }
-                            if ui.input_float("rot##tf", &mut tf.rotation).build() {
-                                transform_changed = true;
-                            }
-                            if ui.input_float("sx##tf", &mut tf.scale.x).build() {
-                                transform_changed = true;
-                            }
-                            if ui.input_float("sy##tf", &mut tf.scale.y).build() {
-                                transform_changed = true;
-                            }
-                            let tf_systems = systems_for("Transform");
-                            if !tf_systems.is_empty() {
-                                ui.text_disabled(format!("  Used by: {tf_systems}"));
-                            }
-                            ui.separator();
-                        }
 
-                        // --- Color ---
-                        if let Some(ref mut c) = new_color {
-                            ui.text("[ Color ]");
-                            let mut arr = [c.r, c.g, c.b, c.a];
-                            if ui.color_edit4("##col", &mut arr) {
-                                c.r = arr[0];
-                                c.g = arr[1];
-                                c.b = arr[2];
-                                c.a = arr[3];
-                                color_changed = true;
+                            // --- Color ---
+                            if let Some(ref mut c) = new_color {
+                                ui.text("[ Color ]");
+                                let mut arr = [c.r, c.g, c.b, c.a];
+                                if ui.color_edit4("##col", &mut arr) {
+                                    c.r = arr[0];
+                                    c.g = arr[1];
+                                    c.b = arr[2];
+                                    c.a = arr[3];
+                                    color_changed = true;
+                                }
+                                let col_systems = systems_for("Color");
+                                if !col_systems.is_empty() {
+                                    ui.text_disabled(format!("  Used by: {col_systems}"));
+                                }
+                                if ui.small_button("Remove##rm_col") {
+                                    remove_color = true;
+                                }
+                                ui.separator();
                             }
-                            let col_systems = systems_for("Color");
-                            if !col_systems.is_empty() {
-                                ui.text_disabled(format!("  Used by: {col_systems}"));
-                            }
-                            if ui.small_button("Remove##rm_col") {
-                                remove_color = true;
-                            }
-                            ui.separator();
-                        }
 
-                        // --- Shape ---
-                        if let Some(ref mut shape) = new_shape {
-                            ui.text("[ Shape ]");
-                            let shape_labels = ["Circle", "Rect", "Triangle"];
-                            let mut shape_index = match shape {
-                                Shape::Circle { .. } => 0,
-                                Shape::Rect { .. } => 1,
-                                Shape::Triangle { .. } => 2,
-                            };
-                            if ui.combo_simple_string("Type##shape", &mut shape_index, &shape_labels) {
-                                *shape = match shape_index {
-                                    0 => Shape::Circle { radius: 50.0 },
-                                    1 => Shape::Rect {
-                                        width: 100.0,
-                                        height: 100.0,
-                                    },
-                                    _ => Shape::Triangle { size: 80.0 },
+                            // --- Shape ---
+                            if let Some(ref mut shape) = new_shape {
+                                ui.text("[ Shape ]");
+                                let shape_labels = ["Circle", "Rect", "Triangle"];
+                                let mut shape_index = match shape {
+                                    Shape::Circle { .. } => 0,
+                                    Shape::Rect { .. } => 1,
+                                    Shape::Triangle { .. } => 2,
                                 };
-                                shape_changed = true;
-                            }
+                                if ui.combo_simple_string(
+                                    "Type##shape",
+                                    &mut shape_index,
+                                    &shape_labels,
+                                ) {
+                                    *shape = match shape_index {
+                                        0 => Shape::Circle { radius: 50.0 },
+                                        1 => Shape::Rect {
+                                            width: 100.0,
+                                            height: 100.0,
+                                        },
+                                        _ => Shape::Triangle { size: 80.0 },
+                                    };
+                                    shape_changed = true;
+                                }
 
-                            match shape {
-                                Shape::Circle { radius } => {
-                                    if ui.input_float("radius##shape", radius).build() {
-                                        shape_changed = true;
+                                match shape {
+                                    Shape::Circle { radius } => {
+                                        if ui.input_float("radius##shape", radius).build() {
+                                            shape_changed = true;
+                                        }
+                                    }
+                                    Shape::Rect { width, height } => {
+                                        if ui.input_float("width##shape", width).build() {
+                                            shape_changed = true;
+                                        }
+                                        if ui.input_float("height##shape", height).build() {
+                                            shape_changed = true;
+                                        }
+                                    }
+                                    Shape::Triangle { size } => {
+                                        if ui.input_float("size##shape", size).build() {
+                                            shape_changed = true;
+                                        }
                                     }
                                 }
-                                Shape::Rect { width, height } => {
-                                    if ui.input_float("width##shape", width).build() {
-                                        shape_changed = true;
-                                    }
-                                    if ui.input_float("height##shape", height).build() {
-                                        shape_changed = true;
-                                    }
+
+                                let shape_systems = systems_for("Shape");
+                                if !shape_systems.is_empty() {
+                                    ui.text_disabled(format!("  Used by: {shape_systems}"));
                                 }
-                                Shape::Triangle { size } => {
-                                    if ui.input_float("size##shape", size).build() {
-                                        shape_changed = true;
-                                    }
+                                if ui.small_button("Remove##rm_shape") {
+                                    remove_shape = true;
                                 }
+                                ui.separator();
                             }
 
-                            let shape_systems = systems_for("Shape");
-                            if !shape_systems.is_empty() {
-                                ui.text_disabled(format!("  Used by: {shape_systems}"));
-                            }
-                            if ui.small_button("Remove##rm_shape") {
-                                remove_shape = true;
-                            }
-                            ui.separator();
-                        }
-
-                        // --- Sinusoid ---
-                        if let Some(ref mut sin) = new_sinusoid {
-                            ui.text("[ Sinusoid ]");
-                            if ui.slider("amp##sin", 0.0_f32, 500.0, &mut sin.amplitude) {
-                                sinusoid_changed = true;
-                            }
-                            if ui.slider("freq##sin", 0.0_f32, 10.0, &mut sin.frequency) {
-                                sinusoid_changed = true;
-                            }
-                            if ui.slider("phase##sin", -PI, PI, &mut sin.phase) {
-                                sinusoid_changed = true;
-                            }
-                            if ui.slider("base_y##sin", -400.0_f32, 400.0, &mut sin.base_y) {
-                                sinusoid_changed = true;
-                            }
-                            let sin_systems = systems_for("SinusoidComponent");
-                            if !sin_systems.is_empty() {
-                                ui.text_disabled(format!("  Used by: {sin_systems}"));
-                            }
-                            if ui.small_button("Remove##rm_sin") {
-                                remove_sinusoid = true;
-                            }
-                            ui.separator();
-                        }
-
-                        // --- PlayerInput ---
-                        if let Some(ref mut pi) = new_player_input {
-                            ui.text("[ Player Input ]");
-
-                            // Build label lists for combo boxes.
-                            use crate::components::ConfigKey;
-                            let key_labels: Vec<&str> =
-                                ConfigKey::ALL.iter().map(|k| k.label()).collect();
-
-                            let mut h_neg = pi.horizontal.negative.index();
-                            let mut h_pos = pi.horizontal.positive.index();
-                            let mut v_neg = pi.vertical.negative.index();
-                            let mut v_pos = pi.vertical.positive.index();
-
-                            ui.text("Horizontal axis:");
-                            if ui.combo_simple_string("H-##pi", &mut h_neg, &key_labels) {
-                                pi.horizontal.negative = ConfigKey::ALL[h_neg];
-                                player_input_changed = true;
-                            }
-                            ui.same_line();
-                            ui.text("neg");
-                            if ui.combo_simple_string("H+##pi", &mut h_pos, &key_labels) {
-                                pi.horizontal.positive = ConfigKey::ALL[h_pos];
-                                player_input_changed = true;
-                            }
-                            ui.same_line();
-                            ui.text("pos");
-
-                            ui.text("Vertical axis:");
-                            if ui.combo_simple_string("V-##pi", &mut v_neg, &key_labels) {
-                                pi.vertical.negative = ConfigKey::ALL[v_neg];
-                                player_input_changed = true;
-                            }
-                            ui.same_line();
-                            ui.text("neg");
-                            if ui.combo_simple_string("V+##pi", &mut v_pos, &key_labels) {
-                                pi.vertical.positive = ConfigKey::ALL[v_pos];
-                                player_input_changed = true;
-                            }
-                            ui.same_line();
-                            ui.text("pos");
-
-                            if ui.slider("Speed##pi", 0.0_f32, 1000.0, &mut pi.speed) {
-                                player_input_changed = true;
+                            // --- Sinusoid ---
+                            if let Some(ref mut sin) = new_sinusoid {
+                                ui.text("[ Sinusoid ]");
+                                if ui.slider("amp##sin", 0.0_f32, 500.0, &mut sin.amplitude) {
+                                    sinusoid_changed = true;
+                                }
+                                if ui.slider("freq##sin", 0.0_f32, 10.0, &mut sin.frequency) {
+                                    sinusoid_changed = true;
+                                }
+                                if ui.slider("phase##sin", -PI, PI, &mut sin.phase) {
+                                    sinusoid_changed = true;
+                                }
+                                if ui.slider("base_y##sin", -400.0_f32, 400.0, &mut sin.base_y) {
+                                    sinusoid_changed = true;
+                                }
+                                let sin_systems = systems_for("SinusoidComponent");
+                                if !sin_systems.is_empty() {
+                                    ui.text_disabled(format!("  Used by: {sin_systems}"));
+                                }
+                                if ui.small_button("Remove##rm_sin") {
+                                    remove_sinusoid = true;
+                                }
+                                ui.separator();
                             }
 
-                            let pi_systems = systems_for("PlayerInput");
-                            if !pi_systems.is_empty() {
-                                ui.text_disabled(format!("  Used by: {pi_systems}"));
-                            }
-                            if ui.small_button("Remove##rm_pi") {
-                                remove_player_input = true;
-                            }
-                            ui.separator();
-                        }
+                            // --- PlayerInput ---
+                            if let Some(ref mut pi) = new_player_input {
+                                ui.text("[ Player Input ]");
 
-                        // --- SpawnPoints ---
-                        if let Some(ref mut sp) = new_spawn_points {
-                            ui.text("[ Spawn Points ]");
-                            ui.text(format!("{} slot(s)", sp.positions.len()));
-                            let mut changed = false;
-                            let mut remove_idx: Option<usize> = None;
-                            for (i, pos) in sp.positions.iter_mut().enumerate() {
-                                let label_x = format!("x##{i}sp");
-                                let label_y = format!("y##{i}sp");
-                                let label_rm = format!("-##{i}sp");
-                                if ui.input_float(&label_x, &mut pos[0]).build() {
-                                    changed = true;
+                                // Build label lists for combo boxes.
+                                use crate::components::ConfigKey;
+                                let key_labels: Vec<&str> =
+                                    ConfigKey::ALL.iter().map(|k| k.label()).collect();
+
+                                let mut h_neg = pi.horizontal.negative.index();
+                                let mut h_pos = pi.horizontal.positive.index();
+                                let mut v_neg = pi.vertical.negative.index();
+                                let mut v_pos = pi.vertical.positive.index();
+
+                                ui.text("Horizontal axis:");
+                                if ui.combo_simple_string("H-##pi", &mut h_neg, &key_labels) {
+                                    pi.horizontal.negative = ConfigKey::ALL[h_neg];
+                                    player_input_changed = true;
                                 }
                                 ui.same_line();
-                                if ui.input_float(&label_y, &mut pos[1]).build() {
-                                    changed = true;
+                                ui.text("neg");
+                                if ui.combo_simple_string("H+##pi", &mut h_pos, &key_labels) {
+                                    pi.horizontal.positive = ConfigKey::ALL[h_pos];
+                                    player_input_changed = true;
                                 }
                                 ui.same_line();
-                                if ui.small_button(&label_rm) {
-                                    remove_idx = Some(i);
+                                ui.text("pos");
+
+                                ui.text("Vertical axis:");
+                                if ui.combo_simple_string("V-##pi", &mut v_neg, &key_labels) {
+                                    pi.vertical.negative = ConfigKey::ALL[v_neg];
+                                    player_input_changed = true;
                                 }
-                            }
-                            if let Some(i) = remove_idx {
-                                sp.positions.remove(i);
-                                changed = true;
-                            }
-                            if ui.small_button("+ Add Spawn Point") {
-                                sp.positions.push([0.0, 0.0, 0.0]);
-                                changed = true;
-                            }
-                            if changed {
-                                spawn_points_changed = true;
-                            }
-                            if ui.small_button("Remove##rm_sp") {
-                                remove_spawn_points = true;
-                            }
-                            ui.separator();
-                        }
+                                ui.same_line();
+                                ui.text("neg");
+                                if ui.combo_simple_string("V+##pi", &mut v_pos, &key_labels) {
+                                    pi.vertical.positive = ConfigKey::ALL[v_pos];
+                                    player_input_changed = true;
+                                }
+                                ui.same_line();
+                                ui.text("pos");
 
-                        // --- Add Component dropdown ---
-                        if let Some(entity) = selected {
-                            let absent_indices: Vec<usize> = self
-                                .state
-                                .component_registry
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, d)| !(d.has)(&core.world, entity))
-                                .map(|(i, _)| i)
-                                .collect();
+                                if ui.slider("Speed##pi", 0.0_f32, 1000.0, &mut pi.speed) {
+                                    player_input_changed = true;
+                                }
 
-                            if !absent_indices.is_empty() {
-                                let absent_names: Vec<&str> = absent_indices
+                                let pi_systems = systems_for("PlayerInput");
+                                if !pi_systems.is_empty() {
+                                    ui.text_disabled(format!("  Used by: {pi_systems}"));
+                                }
+                                if ui.small_button("Remove##rm_pi") {
+                                    remove_player_input = true;
+                                }
+                                ui.separator();
+                            }
+
+                            // --- SpawnPoints ---
+                            if let Some(ref mut sp) = new_spawn_points {
+                                ui.text("[ Spawn Points ]");
+                                ui.text(format!("{} slot(s)", sp.positions.len()));
+                                let mut changed = false;
+                                let mut remove_idx: Option<usize> = None;
+                                for (i, pos) in sp.positions.iter_mut().enumerate() {
+                                    let label_x = format!("x##{i}sp");
+                                    let label_y = format!("y##{i}sp");
+                                    let label_rm = format!("-##{i}sp");
+                                    if ui.input_float(&label_x, &mut pos[0]).build() {
+                                        changed = true;
+                                    }
+                                    ui.same_line();
+                                    if ui.input_float(&label_y, &mut pos[1]).build() {
+                                        changed = true;
+                                    }
+                                    ui.same_line();
+                                    if ui.small_button(&label_rm) {
+                                        remove_idx = Some(i);
+                                    }
+                                }
+                                if let Some(i) = remove_idx {
+                                    sp.positions.remove(i);
+                                    changed = true;
+                                }
+                                if ui.small_button("+ Add Spawn Point") {
+                                    sp.positions.push([0.0, 0.0, 0.0]);
+                                    changed = true;
+                                }
+                                if changed {
+                                    spawn_points_changed = true;
+                                }
+                                if ui.small_button("Remove##rm_sp") {
+                                    remove_spawn_points = true;
+                                }
+                                ui.separator();
+                            }
+
+                            // --- Add Component dropdown ---
+                            if let Some(entity) = selected {
+                                let absent_indices: Vec<usize> = self
+                                    .state
+                                    .component_registry
                                     .iter()
-                                    .map(|&i| self.state.component_registry[i].name)
+                                    .enumerate()
+                                    .filter(|(_, d)| !(d.has)(&core.world, entity))
+                                    .map(|(i, _)| i)
                                     .collect();
 
-                                if self.state.add_component_selection >= absent_indices.len() {
-                                    self.state.add_component_selection = 0;
-                                }
+                                if !absent_indices.is_empty() {
+                                    let absent_names: Vec<&str> = absent_indices
+                                        .iter()
+                                        .map(|&i| self.state.component_registry[i].name)
+                                        .collect();
 
-                                ui.combo_simple_string(
-                                    "##add_comp",
-                                    &mut self.state.add_component_selection,
-                                    &absent_names,
-                                );
-                                ui.same_line();
-                                if ui.button("Add Component") {
-                                    let registry_idx =
-                                        absent_indices[self.state.add_component_selection];
-                                    add_component_req = Some(registry_idx);
+                                    if self.state.add_component_selection >= absent_indices.len() {
+                                        self.state.add_component_selection = 0;
+                                    }
+
+                                    ui.combo_simple_string(
+                                        "##add_comp",
+                                        &mut self.state.add_component_selection,
+                                        &absent_names,
+                                    );
+                                    ui.same_line();
+                                    if ui.button("Add Component") {
+                                        let registry_idx =
+                                            absent_indices[self.state.add_component_selection];
+                                        add_component_req = Some(registry_idx);
+                                    }
                                 }
                             }
-                        }
 
-                        ui.separator();
-                        if ui.button("Despawn Entity") {
-                            despawn_req = true;
-                        }
+                            ui.separator();
+                            if ui.button("Despawn Entity") {
+                                despawn_req = true;
+                            }
                         }
                     }
                 });
 
-            // Camera control via imgui IO (middle-drag to pan, scroll to zoom)
+            // Scene controls only run when the pointer is over the scene itself.
             {
+                let imgui_hovered = ui.is_window_hovered_with_flags(WindowHoveredFlags::ANY_WINDOW);
                 let io = ui.io();
-                if (io.mouse_down[2] || io.mouse_down[1]) && !ui.is_any_item_active() {
-                    cam_pan = io.mouse_delta;
+                let framebuffer_scale = [
+                    io.display_framebuffer_scale[0].max(1.0),
+                    io.display_framebuffer_scale[1].max(1.0),
+                ];
+                let mouse_pos = [
+                    io.mouse_pos[0] * framebuffer_scale[0],
+                    io.mouse_pos[1] * framebuffer_scale[1],
+                ];
+                let mouse_delta = [
+                    io.mouse_delta[0] * framebuffer_scale[0],
+                    io.mouse_delta[1] * framebuffer_scale[1],
+                ];
+                let mouse_in_viewport = (0.0..=viewport_w).contains(&mouse_pos[0])
+                    && (0.0..=viewport_h).contains(&mouse_pos[1]);
+                let scene_hovered = mouse_in_viewport && !imgui_hovered;
+                let scene_input_available =
+                    scene_hovered && !ui.is_any_item_active() && !io.want_capture_mouse;
+
+                if self.state.scene_drag.is_some() && !ui.is_mouse_down(MouseButton::Left) {
+                    self.state.scene_drag = None;
                 }
+
+                if scene_input_available && ui.is_mouse_double_clicked(MouseButton::Left) {
+                    let world_pos = self.state.camera.screen_to_world(mouse_pos);
+                    if let Some(entity) = pick_scene_entity(&core.world, world_pos) {
+                        new_selected = Some(entity);
+                    }
+                }
+
+                if scene_input_available && ui.is_mouse_clicked(MouseButton::Left) {
+                    let world_pos = self.state.camera.screen_to_world(mouse_pos);
+                    if let Some(entity) = pick_scene_entity(&core.world, world_pos) {
+                        if let Some(tf) = core.world.get::<Transform>(entity) {
+                            self.state.scene_drag = Some(SceneEntityDrag {
+                                entity,
+                                grab_offset: Vec2::new(
+                                    world_pos.x - tf.position.x,
+                                    world_pos.y - tf.position.y,
+                                ),
+                            });
+                            new_selected = Some(entity);
+                        }
+                    }
+                }
+
+                if let Some(drag) = self.state.scene_drag {
+                    if ui.is_mouse_down(MouseButton::Left) {
+                        let world_pos = self.state.camera.screen_to_world(mouse_pos);
+                        if let Some(tf) = core.world.get_mut::<Transform>(drag.entity) {
+                            tf.position.x = world_pos.x - drag.grab_offset.x;
+                            tf.position.y = world_pos.y - drag.grab_offset.y;
+                            new_selected = Some(drag.entity);
+                        } else {
+                            self.state.scene_drag = None;
+                        }
+                    }
+                }
+
+                if scene_input_available
+                    && (ui.is_mouse_down(MouseButton::Middle)
+                        || ui.is_mouse_down(MouseButton::Right))
+                {
+                    cam_pan = mouse_delta;
+                }
+
                 let wheel = io.mouse_wheel;
-                if wheel != 0.0 {
+                if scene_input_available && wheel != 0.0 {
                     cam_zoom = wheel;
                 }
             }
-
         } // ui dropped here — NLL releases borrow of core.imgui
 
         core.imgui.end_frame(
@@ -652,6 +757,14 @@ impl EditorRunner {
         }
 
         if let Some(entity) = selected {
+            if tag_changed {
+                if new_tag.trim().is_empty() {
+                    core.world.remove::<Tag>(entity);
+                } else {
+                    core.world.insert(entity, Tag::new(new_tag));
+                }
+            }
+
             if transform_changed {
                 if let Some(tf) = new_transform {
                     core.world.insert(entity, tf);
@@ -756,10 +869,12 @@ impl EditorRunner {
             }
             if let Some(path) = dialog.pick_file() {
                 let path_str = path.to_string_lossy().into_owned();
-                match load_scene(&mut core.world, &path_str) {
+                match reload_scene(&mut core.world, &path_str) {
                     Ok(()) => {
                         self.state.status_message = format!("Loaded ← {path_str}");
                         self.state.scene_path = path_str;
+                        self.state.selected_entity = None;
+                        self.state.scene_drag = None;
                     }
                     Err(e) => self.state.status_message = format!("Load error: {e}"),
                 }
@@ -772,6 +887,60 @@ impl Default for EditorRunner {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn pick_scene_entity(world: &World, point: Vec2) -> Option<Entity> {
+    world
+        .query3::<Transform, Shape, Color>()
+        .filter(|(_, transform, shape, _)| shape_contains_point(transform, shape, point))
+        .max_by(|(a, a_tf, _, _), (b, b_tf, _, _)| {
+            a_tf.position
+                .z
+                .partial_cmp(&b_tf.position.z)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.index.cmp(&b.index))
+                .then_with(|| a.generation.cmp(&b.generation))
+        })
+        .map(|(entity, _, _, _)| entity)
+}
+
+fn shape_contains_point(transform: &Transform, shape: &Shape, point: Vec2) -> bool {
+    let dx = point.x - transform.position.x;
+    let dy = point.y - transform.position.y;
+
+    match *shape {
+        Shape::Circle { radius } => {
+            let radius = radius.abs();
+            dx * dx + dy * dy <= radius * radius
+        }
+        Shape::Rect { width, height } => {
+            dx.abs() <= width.abs() * 0.5 && dy.abs() <= height.abs() * 0.5
+        }
+        Shape::Triangle { size } => {
+            let size = size.abs();
+            if size <= f32::EPSILON {
+                return false;
+            }
+
+            let p = Vec2::new(dx / size, dy / size);
+            let c = transform.rotation.cos();
+            let s = transform.rotation.sin();
+            let rotated = Vec2::new(p.x * c - p.y * s, p.x * s + p.y * c);
+            equilateral_triangle_sdf(rotated) <= 0.0
+        }
+    }
+}
+
+fn equilateral_triangle_sdf(p: Vec2) -> f32 {
+    let k = 3.0_f32.sqrt();
+    let mut q = Vec2::new(p.x.abs() - 0.5, p.y + 0.5 / k);
+
+    if q.x + k * q.y > 0.0 {
+        q = Vec2::new(q.x - k * q.y, -k * q.x - q.y) * 0.5;
+    }
+    q.x -= q.x.clamp(-1.0, 0.0);
+
+    -q.length() * q.y.signum()
 }
 
 // ---------------------------------------------------------------------------

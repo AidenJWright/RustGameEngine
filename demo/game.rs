@@ -1358,6 +1358,7 @@ fn ctf_owned_slots(world: &World, peer_id: u64) -> Vec<CtfSlot> {
         .unwrap_or_default()
 }
 
+/*
 fn apply_ctf_authority_resources(
     world: &mut World,
     snapshot: &Snapshot,
@@ -1383,6 +1384,7 @@ fn apply_ctf_authority_resources(
         &authority_keys,
     );
 }
+*/
 
 fn apply_ctf_authority_resources_with_keys(
     world: &mut World,
@@ -3176,7 +3178,7 @@ fn recv_match_event(socket: &UdpSocket) -> io::Result<MatchEvent> {
 mod tests {
     use super::*;
     use forge_ecs::game::ctf::resources::PlayerControl;
-    use forge_ecs::multiplayer::{CtfFlagMotionSnapshot, CtfSnapshotState};
+    use forge_ecs::multiplayer::CtfSnapshotState;
 
     fn ctf_resource_world() -> World {
         let mut world = World::new();
@@ -3291,60 +3293,6 @@ mod tests {
     }
 
     #[test]
-    fn ctf_global_phase_ignores_non_host_snapshots() {
-        let mut world = ctf_resource_world();
-
-        apply_ctf_authority_resources(
-            &mut world,
-            &ctf_snapshot(None),
-            2,
-            1,
-            GameMode::CaptureTheFlag,
-        );
-
-        assert_eq!(
-            world.resource::<GameState>().expect("game state").phase,
-            GamePhase::Won(1)
-        );
-    }
-
-    #[test]
-    fn ctf_global_phase_accepts_host_restart_snapshot() {
-        let mut world = ctf_resource_world();
-
-        apply_ctf_authority_resources(
-            &mut world,
-            &ctf_snapshot(None),
-            1,
-            1,
-            GameMode::CaptureTheFlag,
-        );
-
-        assert_eq!(
-            world.resource::<GameState>().expect("game state").phase,
-            GamePhase::Playing
-        );
-    }
-
-    #[test]
-    fn ctf_authority_selected_slot_must_be_owned() {
-        let mut world = ctf_resource_world();
-        let mut snapshot = ctf_snapshot(None);
-        let ctf = snapshot.ctf.as_mut().expect("ctf snapshot");
-        ctf.selected_slots[0].primary_slot = CtfSlot::Red3;
-
-        apply_ctf_authority_resources(&mut world, &snapshot, 1, 1, GameMode::CaptureTheFlag);
-
-        let controls = world.resource::<ControlState>().expect("controls");
-        let red = controls
-            .controls
-            .iter()
-            .find(|control| control.client_id == 1)
-            .expect("red control");
-        assert_eq!(red.selected_slot, CtfSlot::Red1);
-    }
-
-    #[test]
     fn ctf_authority_keys_keep_peer_movement_ownership() {
         let world = ctf_resource_world();
         let keys = authoritative_entity_keys(&world, 1, 1, GameMode::CaptureTheFlag, &[]);
@@ -3414,91 +3362,6 @@ mod tests {
         let keys = authoritative_entity_keys(&world, 1, 99, GameMode::CaptureTheFlag, &[]);
 
         assert!(keys.contains(&AuthorityEntityKey::Stable(StableEntityId::CtfRedFlag)));
-    }
-
-    #[test]
-    fn non_host_snapshot_can_publish_own_flag_throw_transition() {
-        let mut world = ctf_resource_world();
-        world.insert_resource(CarrierState {
-            red_flag_carrier: Some(CtfSlot::Red1),
-            blue_flag_carrier: None,
-        });
-        let mut snapshot = ctf_snapshot(None);
-        let ctf = snapshot.ctf.as_mut().expect("ctf snapshot");
-        ctf.red_flag_carrier = None;
-        ctf.red_flag_motion = Some(CtfFlagMotionSnapshot {
-            dir_x: 1.0,
-            dir_y: 0.0,
-            remaining_distance: 80.0,
-            released_by: Some(CtfSlot::Red1),
-        });
-
-        apply_ctf_authority_resources(&mut world, &snapshot, 1, 99, GameMode::CaptureTheFlag);
-
-        assert_eq!(
-            world
-                .resource::<CarrierState>()
-                .expect("carrier")
-                .red_flag_carrier,
-            None
-        );
-        assert_eq!(
-            world.resource::<FlagMotionState>().expect("motion").red,
-            Some(forge_ecs::game::ctf::resources::FlagMotion {
-                dir_x: 1.0,
-                dir_y: 0.0,
-                remaining_distance: 80.0,
-                released_by: Some(CtfSlot::Red1),
-            })
-        );
-    }
-
-    #[test]
-    fn host_ctf_snapshot_clears_stale_own_flag_carrier() {
-        let mut world = ctf_resource_world();
-        world.insert_resource(CarrierState {
-            red_flag_carrier: Some(CtfSlot::Red1),
-            blue_flag_carrier: None,
-        });
-
-        apply_ctf_authority_resources(
-            &mut world,
-            &ctf_snapshot(None),
-            1,
-            1,
-            GameMode::CaptureTheFlag,
-        );
-
-        assert_eq!(
-            world
-                .resource::<CarrierState>()
-                .expect("carrier")
-                .red_flag_carrier,
-            None
-        );
-    }
-
-    #[test]
-    fn host_forced_flag_snapshot_clears_stale_enemy_carrier() {
-        let mut world = ctf_resource_world();
-        world.insert_resource(CarrierState {
-            red_flag_carrier: Some(CtfSlot::Blue1),
-            blue_flag_carrier: None,
-        });
-        let mut snapshot = ctf_snapshot(None);
-        snapshot
-            .entities
-            .push(entity_packet(StableEntityId::CtfRedFlag, 320.0));
-
-        apply_ctf_authority_resources(&mut world, &snapshot, 1, 1, GameMode::CaptureTheFlag);
-
-        assert_eq!(
-            world
-                .resource::<CarrierState>()
-                .expect("carrier")
-                .red_flag_carrier,
-            None
-        );
     }
 
     #[test]

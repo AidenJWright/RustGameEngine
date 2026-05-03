@@ -4,6 +4,21 @@
 use super::camera::Camera2D;
 use super::component_registry::{ComponentDescriptor, SystemComponentEntry};
 use crate::ecs::entity::Entity;
+use crate::math::Vec2;
+
+/// Stored normal-mode editor window rectangle used when restoring from maximize.
+#[derive(Debug, Clone, Copy)]
+pub struct EditorWindowRect {
+    pub pos: [f32; 2],
+    pub size: [f32; 2],
+}
+
+/// Current left-button scene drag operation.
+#[derive(Debug, Clone, Copy)]
+pub struct SceneEntityDrag {
+    pub entity: Entity,
+    pub grab_offset: Vec2,
+}
 
 /// Mutable editor runtime state passed between frames.
 pub struct EditorState {
@@ -29,6 +44,12 @@ pub struct EditorState {
     pub add_component_selection: usize,
     /// Whether the unified editor window should fill the viewport.
     pub editor_window_maximized: bool,
+    /// Last normal window rectangle captured before maximizing.
+    pub editor_window_restore_rect: Option<EditorWindowRect>,
+    /// Force the stored normal rectangle back into imgui on the next frame.
+    pub editor_window_restore_pending: bool,
+    /// Entity currently being moved directly in the scene viewport.
+    pub scene_drag: Option<SceneEntityDrag>,
 }
 
 impl Default for EditorState {
@@ -42,6 +63,9 @@ impl Default for EditorState {
             system_component_map: Vec::new(),
             add_component_selection: 0,
             editor_window_maximized: false,
+            editor_window_restore_rect: None,
+            editor_window_restore_pending: false,
+            scene_drag: None,
         }
     }
 }

@@ -182,7 +182,8 @@
       "transform": { "position": { "x": 160.0, "y": 320.0, "z": 10.0 }, "rotation": 1.5707964, "scale": { "x": 1.0, "y": 1.0, "z": 1.0 } },
       "shape": { "Triangle": { "size": 40.0 } },
       "color": { "r": 1.0, "g": 0.18, "b": 0.18, "a": 1.0 },
-      "velocity": { "dx": 0.0, "dy": 0.0 }
+      "velocity": { "dx": 0.0, "dy": 0.0 },
+      "player_input": { "horizontal": { "negative": "A", "positive": "D" }, "vertical": { "negative": "W", "positive": "S" }, "speed": 330.0 }
     },
     {
       "id": 23,
@@ -191,7 +192,8 @@
       "transform": { "position": { "x": 160.0, "y": 400.0, "z": 10.0 }, "rotation": 1.5707964, "scale": { "x": 1.0, "y": 1.0, "z": 1.0 } },
       "shape": { "Triangle": { "size": 40.0 } },
       "color": { "r": 1.0, "g": 0.32, "b": 0.32, "a": 1.0 },
-      "velocity": { "dx": 0.0, "dy": 0.0 }
+      "velocity": { "dx": 0.0, "dy": 0.0 },
+      "player_input": { "horizontal": { "negative": "A", "positive": "D" }, "vertical": { "negative": "W", "positive": "S" }, "speed": 330.0 }
     },
     {
       "id": 24,
@@ -200,7 +202,8 @@
       "transform": { "position": { "x": 1120.0, "y": 320.0, "z": 10.0 }, "rotation": -1.5707964, "scale": { "x": 1.0, "y": 1.0, "z": 1.0 } },
       "shape": { "Triangle": { "size": 40.0 } },
       "color": { "r": 0.18, "g": 0.44, "b": 1.0, "a": 1.0 },
-      "velocity": { "dx": 0.0, "dy": 0.0 }
+      "velocity": { "dx": 0.0, "dy": 0.0 },
+      "player_input": { "horizontal": { "negative": "ArrowLeft", "positive": "ArrowRight" }, "vertical": { "negative": "ArrowUp", "positive": "ArrowDown" }, "speed": 330.0 }
     },
     {
       "id": 25,
@@ -209,7 +212,8 @@
       "transform": { "position": { "x": 1120.0, "y": 400.0, "z": 10.0 }, "rotation": -1.5707964, "scale": { "x": 1.0, "y": 1.0, "z": 1.0 } },
       "shape": { "Triangle": { "size": 40.0 } },
       "color": { "r": 0.34, "g": 0.56, "b": 1.0, "a": 1.0 },
-      "velocity": { "dx": 0.0, "dy": 0.0 }
+      "velocity": { "dx": 0.0, "dy": 0.0 },
+      "player_input": { "horizontal": { "negative": "ArrowLeft", "positive": "ArrowRight" }, "vertical": { "negative": "ArrowUp", "positive": "ArrowDown" }, "speed": 330.0 }
     },
     {
       "id": 26,

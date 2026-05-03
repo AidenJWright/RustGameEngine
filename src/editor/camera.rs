@@ -90,6 +90,14 @@ impl Camera2D {
         self.position.y -= dy / self.zoom;
     }
 
+    /// Convert a viewport-space pixel position into world coordinates.
+    pub fn screen_to_world(&self, screen: [f32; 2]) -> Vec2 {
+        Vec2::new(
+            screen[0] / self.zoom + self.position.x,
+            screen[1] / self.zoom + self.position.y,
+        )
+    }
+
     /// Zoom toward or away from the viewport origin.
     ///
     /// `delta` is the scroll-wheel notch count (positive = zoom in).

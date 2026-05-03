@@ -424,6 +424,12 @@ fn wall(id: u64, x: f64, y: f64, z: f64, w: f64, h: f64, c: [f64; 4]) -> Value {
 }
 
 fn player(id: u64, tag: &str, x: f64, y: f64, rot: f64, c: [f64; 4]) -> Value {
+    let player_input = if tag.contains("_red_") {
+        wasd_player_input()
+    } else {
+        arrow_player_input()
+    };
+
     json!({
         "id": id, "parent": 0, "tag": tag,
         "transform": {
@@ -433,6 +439,23 @@ fn player(id: u64, tag: &str, x: f64, y: f64, rot: f64, c: [f64; 4]) -> Value {
         },
         "shape": { "Triangle": { "size": 40.0 } },
         "color": { "r": c[0], "g": c[1], "b": c[2], "a": c[3] },
-        "velocity": { "dx": 0.0, "dy": 0.0 }
+        "velocity": { "dx": 0.0, "dy": 0.0 },
+        "player_input": player_input
+    })
+}
+
+fn wasd_player_input() -> Value {
+    player_input("A", "D", "W", "S")
+}
+
+fn arrow_player_input() -> Value {
+    player_input("ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown")
+}
+
+fn player_input(left: &str, right: &str, up: &str, down: &str) -> Value {
+    json!({
+        "horizontal": { "negative": left, "positive": right },
+        "vertical": { "negative": up, "positive": down },
+        "speed": 330.0
     })
 }

@@ -21,6 +21,7 @@ use forge_ecs::components::{
 };
 use forge_ecs::editor::{ComponentDescriptor, SystemComponentEntry};
 use forge_ecs::math::Vec3;
+use forge_ecs::scene::{reload_scene, DEFAULT_SCENE_PATH};
 
 fn main() {
     let mut runner = EditorRunner::new();
@@ -158,7 +159,7 @@ fn main() {
         },
         SystemComponentEntry {
             system_name: "PlayerInputSystem",
-            component_names: &["PlayerInput", "Velocity"],
+            component_names: &["PlayerInput"],
         },
         SystemComponentEntry {
             system_name: "Renderer",
@@ -167,6 +168,12 @@ fn main() {
     ];
 
     runner.run("Forge ECS — Editor", 1280, 720, |world| {
+        if reload_scene(world, DEFAULT_SCENE_PATH).is_ok() {
+            return;
+        }
+
+        eprintln!("Could not load {DEFAULT_SCENE_PATH}; using generated editor scene.");
+
         let scene_root = world.spawn();
         world.insert(scene_root, Tag::new("scene_root"));
 

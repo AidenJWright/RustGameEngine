@@ -5,6 +5,7 @@ use super::camera::Camera2D;
 use super::component_registry::{ComponentDescriptor, SystemComponentEntry};
 use crate::ecs::entity::Entity;
 use crate::math::Vec2;
+use crate::scene::DEFAULT_SCENE_PATH;
 
 /// Stored normal-mode editor window rectangle used when restoring from maximize.
 #[derive(Debug, Clone, Copy)]
@@ -18,6 +19,33 @@ pub struct EditorWindowRect {
 pub struct SceneEntityDrag {
     pub entity: Entity,
     pub grab_offset: Vec2,
+}
+
+/// One editable `PlayerInput` binding in the inspector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerInputBinding {
+    HorizontalNegative,
+    HorizontalPositive,
+    VerticalNegative,
+    VerticalPositive,
+}
+
+impl PlayerInputBinding {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::HorizontalNegative => "Horizontal -",
+            Self::HorizontalPositive => "Horizontal +",
+            Self::VerticalNegative => "Vertical -",
+            Self::VerticalPositive => "Vertical +",
+        }
+    }
+}
+
+/// Pending key-capture operation for a `PlayerInput` binding field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlayerInputCapture {
+    pub entity: Entity,
+    pub binding: PlayerInputBinding,
 }
 
 /// Mutable editor runtime state passed between frames.
@@ -50,6 +78,8 @@ pub struct EditorState {
     pub editor_window_restore_pending: bool,
     /// Entity currently being moved directly in the scene viewport.
     pub scene_drag: Option<SceneEntityDrag>,
+    /// `PlayerInput` binding currently waiting for the next keypress.
+    pub player_input_capture: Option<PlayerInputCapture>,
 }
 
 impl Default for EditorState {
@@ -57,7 +87,7 @@ impl Default for EditorState {
         Self {
             selected_entity: None,
             camera: Camera2D::new(),
-            scene_path: "scene.json".to_string(),
+            scene_path: DEFAULT_SCENE_PATH.to_string(),
             status_message: String::new(),
             component_registry: Vec::new(),
             system_component_map: Vec::new(),
@@ -66,6 +96,7 @@ impl Default for EditorState {
             editor_window_restore_rect: None,
             editor_window_restore_pending: false,
             scene_drag: None,
+            player_input_capture: None,
         }
     }
 }

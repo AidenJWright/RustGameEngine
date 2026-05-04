@@ -207,7 +207,7 @@ contains only player identities and that player's relay token.
 Build and push a new image tag:
 
 ```bash
-export IMAGE_TAG="relay-v3"
+export IMAGE_TAG="relay-v7"
 export IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${IMAGE_NAME}:${IMAGE_TAG}"
 
 docker build -f Dockerfile.matchmaker -t "${IMAGE_URI}" .

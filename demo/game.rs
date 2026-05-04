@@ -62,7 +62,7 @@ use forge_ecs::platform::{
     map_window_event, KeyCode, MouseButton as EngineMouseButton, PlatformEvent,
 };
 use forge_ecs::renderer::draw::DrawCommand;
-use forge_ecs::scene::reload_scene;
+use forge_ecs::scene::{reload_scene, DEFAULT_SCENE_PATH};
 use forge_ecs::systems::{MovementSystem, PlayerInputSystem, SinusoidSystem};
 
 #[derive(Debug, Parser)]
@@ -100,28 +100,8 @@ enum Mode {
 }
 
 /// Map engine `KeyCode` to the discriminant used by `PlayerInput` and `KeysPressed`.
-///
-/// Discriminants must match `forge_ecs::systems::player_input::config_key_discriminant`.
 fn key_discriminant(code: KeyCode) -> Option<u32> {
-    match code {
-        KeyCode::Left => Some(0),
-        KeyCode::Right => Some(1),
-        KeyCode::Up => Some(2),
-        KeyCode::Down => Some(3),
-        KeyCode::W => Some(4),
-        KeyCode::A => Some(5),
-        KeyCode::S => Some(6),
-        KeyCode::D => Some(7),
-        KeyCode::Space => Some(8),
-        KeyCode::Return => Some(9),
-        KeyCode::LeftShift => Some(10),
-        KeyCode::R => Some(11),
-        KeyCode::Digit1 => Some(12),
-        KeyCode::Digit2 => Some(13),
-        KeyCode::Digit3 => Some(14),
-        KeyCode::Digit4 => Some(15),
-        _ => None,
-    }
+    forge_ecs::systems::player_input::key_code_discriminant(code)
 }
 
 /// Compute normalised (move_x, move_y) from a player entity's `PlayerInput`
@@ -1718,9 +1698,9 @@ fn screen_to_ctf_world(state: &DemoState, x: f64, y: f64) -> (f32, f32) {
 }
 
 fn initialize_single_player_scene(state: &mut DemoState) {
-    // Load scene.json; fall back to a generated default if missing.
-    if let Err(e) = reload_scene(&mut state.core.world, "scene.json") {
-        println!("scene.json not found or invalid ({e}), spawning default player");
+    // Load the editor-authored default scene; fall back to a generated player if missing.
+    if let Err(e) = reload_scene(&mut state.core.world, DEFAULT_SCENE_PATH) {
+        println!("{DEFAULT_SCENE_PATH} not found or invalid ({e}), spawning default player");
         setup_single_player_scene(&mut state.core.world);
     }
 
@@ -1774,8 +1754,8 @@ fn initialize_single_player_scene(state: &mut DemoState) {
 
 fn initialize_multiplayer_scene(state: &mut DemoState, session: MatchSession) {
     // Load the shared editor scene first.
-    if let Err(e) = reload_scene(&mut state.core.world, "scene.json") {
-        println!("scene.json not found ({e}), using generated layout");
+    if let Err(e) = reload_scene(&mut state.core.world, DEFAULT_SCENE_PATH) {
+        println!("{DEFAULT_SCENE_PATH} not found ({e}), using generated layout");
     }
 
     let local_player_id = session.local_peer_id();
@@ -2098,7 +2078,9 @@ fn draw_launcher_ui(ui: &imgui::Ui, launcher: &mut LauncherRuntime) {
                 }
                 LauncherScreen::SinglePlayerReady => {
                     ui.text("Single Player");
-                    ui.text("Loads scene.json and starts the game locally.");
+                    ui.text(format!(
+                        "Loads {DEFAULT_SCENE_PATH} and starts the game locally."
+                    ));
                     if ui.button("Play") {
                         launcher.single_player_ready = true;
                     }
@@ -2260,7 +2242,7 @@ fn normalized_ctf_assignments(lobby: &LobbyState) -> Vec<CtfSlotAssignment> {
     assignments
 }
 
-/// Spawn a minimal fallback player entity when `scene.json` is missing.
+/// Spawn a minimal fallback player entity when the default scene is missing.
 fn setup_single_player_scene(world: &mut World) {
     let scene_root = world.spawn();
     world.insert(scene_root, Tag::new("scene_root"));

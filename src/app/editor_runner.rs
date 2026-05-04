@@ -11,18 +11,24 @@ use winit::keyboard::KeyLocation;
 use winit::window::{Window, WindowAttributes, WindowId};
 
 use crate::components::{
-    Color, PlayerInput, Shape, SinusoidComponent, SpawnPoints, Tag, Transform,
+    Color, ConfigKey, PlayerInput, Shape, SinusoidComponent, SpawnPoints, Tag, Transform,
 };
 use crate::ecs::entity::Entity;
 use crate::ecs::resource::{DeltaTime, ElapsedTime};
 use crate::ecs::world::World;
-use crate::editor::state::{EditorWindowRect, SceneEntityDrag};
-use crate::editor::EditorState;
+use crate::editor::state::{
+    EditorWindowRect, PlayerInputBinding, PlayerInputCapture, SceneEntityDrag,
+};
+use crate::editor::{EditorState, SystemComponentEntry};
 use crate::math::Vec2;
 use crate::messaging::MessageBus;
+use crate::platform::{map_physical_key, KeyCode};
 use crate::renderer::draw::DrawCommand;
+#[cfg(feature = "file-dialog")]
 use crate::scene::{reload_scene, save_scene};
+use crate::systems::player_input::config_key_from_key_code;
 use imgui::{MouseButton, WindowHoveredFlags};
+#[cfg(feature = "file-dialog")]
 use rfd;
 
 use super::core::AppCore;
@@ -363,18 +369,6 @@ impl EditorRunner {
                                 ui.separator();
                             }
 
-                            // Helper: collect system names that read a given component.
-                            let systems_for = |comp: &str| -> String {
-                                let names: Vec<&str> = self
-                                    .state
-                                    .system_component_map
-                                    .iter()
-                                    .filter(|e| e.component_names.contains(&comp))
-                                    .map(|e| e.system_name)
-                                    .collect();
-                                names.join(", ")
-                            };
-
                             // --- Transform (guaranteed, cannot be removed) ---
                             if let Some(ref mut tf) = new_transform {
                                 ui.text("[ Transform ]");
@@ -393,7 +387,10 @@ impl EditorRunner {
                                 if ui.input_float("sy##tf", &mut tf.scale.y).build() {
                                     transform_changed = true;
                                 }
-                                let tf_systems = systems_for("Transform");
+                                let tf_systems = systems_for_component(
+                                    &self.state.system_component_map,
+                                    "Transform",
+                                );
                                 if !tf_systems.is_empty() {
                                     ui.text_disabled(format!("  Used by: {tf_systems}"));
                                 }
@@ -411,7 +408,10 @@ impl EditorRunner {
                                     c.a = arr[3];
                                     color_changed = true;
                                 }
-                                let col_systems = systems_for("Color");
+                                let col_systems = systems_for_component(
+                                    &self.state.system_component_map,
+                                    "Color",
+                                );
                                 if !col_systems.is_empty() {
                                     ui.text_disabled(format!("  Used by: {col_systems}"));
                                 }
@@ -467,7 +467,10 @@ impl EditorRunner {
                                     }
                                 }
 
-                                let shape_systems = systems_for("Shape");
+                                let shape_systems = systems_for_component(
+                                    &self.state.system_component_map,
+                                    "Shape",
+                                );
                                 if !shape_systems.is_empty() {
                                     ui.text_disabled(format!("  Used by: {shape_systems}"));
                                 }
@@ -492,7 +495,10 @@ impl EditorRunner {
                                 if ui.slider("base_y##sin", -400.0_f32, 400.0, &mut sin.base_y) {
                                     sinusoid_changed = true;
                                 }
-                                let sin_systems = systems_for("SinusoidComponent");
+                                let sin_systems = systems_for_component(
+                                    &self.state.system_component_map,
+                                    "SinusoidComponent",
+                                );
                                 if !sin_systems.is_empty() {
                                     ui.text_disabled(format!("  Used by: {sin_systems}"));
                                 }
@@ -505,50 +511,49 @@ impl EditorRunner {
                             // --- PlayerInput ---
                             if let Some(ref mut pi) = new_player_input {
                                 ui.text("[ Player Input ]");
-
-                                // Build label lists for combo boxes.
-                                use crate::components::ConfigKey;
-                                let key_labels: Vec<&str> =
-                                    ConfigKey::ALL.iter().map(|k| k.label()).collect();
-
-                                let mut h_neg = pi.horizontal.negative.index();
-                                let mut h_pos = pi.horizontal.positive.index();
-                                let mut v_neg = pi.vertical.negative.index();
-                                let mut v_pos = pi.vertical.positive.index();
+                                let entity =
+                                    selected.expect("PlayerInput inspector requires selection");
 
                                 ui.text("Horizontal axis:");
-                                if ui.combo_simple_string("H-##pi", &mut h_neg, &key_labels) {
-                                    pi.horizontal.negative = ConfigKey::ALL[h_neg];
-                                    player_input_changed = true;
-                                }
-                                ui.same_line();
-                                ui.text("neg");
-                                if ui.combo_simple_string("H+##pi", &mut h_pos, &key_labels) {
-                                    pi.horizontal.positive = ConfigKey::ALL[h_pos];
-                                    player_input_changed = true;
-                                }
-                                ui.same_line();
-                                ui.text("pos");
+                                player_input_changed |= draw_player_input_binding_field(
+                                    ui,
+                                    &mut self.state,
+                                    entity,
+                                    pi,
+                                    PlayerInputBinding::HorizontalNegative,
+                                );
+                                player_input_changed |= draw_player_input_binding_field(
+                                    ui,
+                                    &mut self.state,
+                                    entity,
+                                    pi,
+                                    PlayerInputBinding::HorizontalPositive,
+                                );
 
                                 ui.text("Vertical axis:");
-                                if ui.combo_simple_string("V-##pi", &mut v_neg, &key_labels) {
-                                    pi.vertical.negative = ConfigKey::ALL[v_neg];
-                                    player_input_changed = true;
-                                }
-                                ui.same_line();
-                                ui.text("neg");
-                                if ui.combo_simple_string("V+##pi", &mut v_pos, &key_labels) {
-                                    pi.vertical.positive = ConfigKey::ALL[v_pos];
-                                    player_input_changed = true;
-                                }
-                                ui.same_line();
-                                ui.text("pos");
+                                player_input_changed |= draw_player_input_binding_field(
+                                    ui,
+                                    &mut self.state,
+                                    entity,
+                                    pi,
+                                    PlayerInputBinding::VerticalNegative,
+                                );
+                                player_input_changed |= draw_player_input_binding_field(
+                                    ui,
+                                    &mut self.state,
+                                    entity,
+                                    pi,
+                                    PlayerInputBinding::VerticalPositive,
+                                );
 
                                 if ui.slider("Speed##pi", 0.0_f32, 1000.0, &mut pi.speed) {
                                     player_input_changed = true;
                                 }
 
-                                let pi_systems = systems_for("PlayerInput");
+                                let pi_systems = systems_for_component(
+                                    &self.state.system_component_map,
+                                    "PlayerInput",
+                                );
                                 if !pi_systems.is_empty() {
                                     ui.text_disabled(format!("  Used by: {pi_systems}"));
                                 }
@@ -837,47 +842,63 @@ impl EditorRunner {
         }
 
         if save_req {
-            let current = std::path::Path::new(&self.state.scene_path);
-            let mut dialog = rfd::FileDialog::new()
-                .add_filter("Scene JSON", &["json"])
-                .set_file_name(
-                    current
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("scene.json"),
-                );
-            if let Some(dir) = current.parent().filter(|d| d != &std::path::Path::new("")) {
-                dialog = dialog.set_directory(dir);
-            }
-            if let Some(path) = dialog.save_file() {
-                let path_str = path.to_string_lossy().into_owned();
-                match save_scene(&core.world, &path_str) {
-                    Ok(()) => {
-                        self.state.status_message = format!("Saved → {path_str}");
-                        self.state.scene_path = path_str;
-                    }
-                    Err(e) => self.state.status_message = format!("Save error: {e}"),
+            #[cfg(feature = "file-dialog")]
+            {
+                let current = std::path::Path::new(&self.state.scene_path);
+                let mut dialog = rfd::FileDialog::new()
+                    .add_filter("Scene JSON", &["json"])
+                    .set_file_name(
+                        current
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("scene.json"),
+                    );
+                if let Some(dir) = current.parent().filter(|d| d != &std::path::Path::new("")) {
+                    dialog = dialog.set_directory(dir);
                 }
+                if let Some(path) = dialog.save_file() {
+                    let path_str = path.to_string_lossy().into_owned();
+                    match save_scene(&core.world, &path_str) {
+                        Ok(()) => {
+                            self.state.status_message = format!("Saved → {path_str}");
+                            self.state.scene_path = path_str;
+                        }
+                        Err(e) => self.state.status_message = format!("Save error: {e}"),
+                    }
+                }
+            }
+
+            #[cfg(not(feature = "file-dialog"))]
+            {
+                self.state.status_message = "Save dialog unavailable in this build".to_string();
             }
         }
 
         if load_req {
-            let current = std::path::Path::new(&self.state.scene_path);
-            let mut dialog = rfd::FileDialog::new().add_filter("Scene JSON", &["json"]);
-            if let Some(dir) = current.parent().filter(|d| d != &std::path::Path::new("")) {
-                dialog = dialog.set_directory(dir);
-            }
-            if let Some(path) = dialog.pick_file() {
-                let path_str = path.to_string_lossy().into_owned();
-                match reload_scene(&mut core.world, &path_str) {
-                    Ok(()) => {
-                        self.state.status_message = format!("Loaded ← {path_str}");
-                        self.state.scene_path = path_str;
-                        self.state.selected_entity = None;
-                        self.state.scene_drag = None;
-                    }
-                    Err(e) => self.state.status_message = format!("Load error: {e}"),
+            #[cfg(feature = "file-dialog")]
+            {
+                let current = std::path::Path::new(&self.state.scene_path);
+                let mut dialog = rfd::FileDialog::new().add_filter("Scene JSON", &["json"]);
+                if let Some(dir) = current.parent().filter(|d| d != &std::path::Path::new("")) {
+                    dialog = dialog.set_directory(dir);
                 }
+                if let Some(path) = dialog.pick_file() {
+                    let path_str = path.to_string_lossy().into_owned();
+                    match reload_scene(&mut core.world, &path_str) {
+                        Ok(()) => {
+                            self.state.status_message = format!("Loaded ← {path_str}");
+                            self.state.scene_path = path_str;
+                            self.state.selected_entity = None;
+                            self.state.scene_drag = None;
+                        }
+                        Err(e) => self.state.status_message = format!("Load error: {e}"),
+                    }
+                }
+            }
+
+            #[cfg(not(feature = "file-dialog"))]
+            {
+                self.state.status_message = "Load dialog unavailable in this build".to_string();
             }
         }
     }
@@ -931,6 +952,15 @@ fn shape_contains_point(transform: &Transform, shape: &Shape, point: Vec2) -> bo
     }
 }
 
+fn systems_for_component(entries: &[SystemComponentEntry], component: &str) -> String {
+    let names: Vec<&str> = entries
+        .iter()
+        .filter(|entry| entry.component_names.contains(&component))
+        .map(|entry| entry.system_name)
+        .collect();
+    names.join(", ")
+}
+
 fn equilateral_triangle_sdf(p: Vec2) -> f32 {
     let k = 3.0_f32.sqrt();
     let mut q = Vec2::new(p.x.abs() - 0.5, p.y + 0.5 / k);
@@ -941,6 +971,105 @@ fn equilateral_triangle_sdf(p: Vec2) -> f32 {
     q.x -= q.x.clamp(-1.0, 0.0);
 
     -q.length() * q.y.signum()
+}
+
+fn player_input_binding_key_mut(
+    input: &mut PlayerInput,
+    binding: PlayerInputBinding,
+) -> &mut ConfigKey {
+    match binding {
+        PlayerInputBinding::HorizontalNegative => &mut input.horizontal.negative,
+        PlayerInputBinding::HorizontalPositive => &mut input.horizontal.positive,
+        PlayerInputBinding::VerticalNegative => &mut input.vertical.negative,
+        PlayerInputBinding::VerticalPositive => &mut input.vertical.positive,
+    }
+}
+
+fn player_input_binding_id(binding: PlayerInputBinding) -> &'static str {
+    match binding {
+        PlayerInputBinding::HorizontalNegative => "h_neg",
+        PlayerInputBinding::HorizontalPositive => "h_pos",
+        PlayerInputBinding::VerticalNegative => "v_neg",
+        PlayerInputBinding::VerticalPositive => "v_pos",
+    }
+}
+
+fn draw_player_input_binding_field(
+    ui: &imgui::Ui,
+    state: &mut EditorState,
+    entity: Entity,
+    input: &mut PlayerInput,
+    binding: PlayerInputBinding,
+) -> bool {
+    let key = *player_input_binding_key_mut(input, binding);
+    let capture = PlayerInputCapture { entity, binding };
+    let is_capturing = state.player_input_capture == Some(capture);
+    let value = if is_capturing {
+        "Press key..."
+    } else {
+        key.label()
+    };
+    let id = player_input_binding_id(binding);
+    let button_label = format!("{}: {}##pi_bind_{id}", binding.label(), value);
+
+    if ui.button(&button_label) {
+        state.player_input_capture = Some(capture);
+        state.status_message = format!("Press a key for {}", binding.label());
+    }
+
+    ui.same_line();
+    let clear_label = format!("Clear##pi_bind_clear_{id}");
+    if ui.small_button(&clear_label) {
+        *player_input_binding_key_mut(input, binding) = ConfigKey::None;
+        if is_capturing {
+            state.player_input_capture = None;
+        }
+        return key != ConfigKey::None;
+    }
+
+    false
+}
+
+fn handle_player_input_capture(
+    runner: &mut EditorRunner,
+    core: &mut AppCore,
+    event: &WindowEvent,
+) -> bool {
+    let Some(capture) = runner.state.player_input_capture else {
+        return false;
+    };
+    let WindowEvent::KeyboardInput {
+        event: key_event, ..
+    } = event
+    else {
+        return false;
+    };
+
+    if key_event.state != ElementState::Pressed {
+        return true;
+    }
+
+    let code = map_physical_key(key_event.physical_key);
+    if code == KeyCode::Escape {
+        runner.state.player_input_capture = None;
+        runner.state.status_message = "PlayerInput binding cancelled".to_string();
+        return true;
+    }
+
+    let Some(key) = config_key_from_key_code(code) else {
+        runner.state.status_message = "Unsupported PlayerInput key".to_string();
+        return true;
+    };
+
+    if let Some(input) = core.world.get_mut::<PlayerInput>(capture.entity) {
+        *player_input_binding_key_mut(input, capture.binding) = key;
+        runner.state.status_message =
+            format!("Bound {} to {}", capture.binding.label(), key.label());
+    } else {
+        runner.state.status_message = "Selected entity no longer has PlayerInput".to_string();
+    }
+    runner.state.player_input_capture = None;
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -992,6 +1121,10 @@ impl ApplicationHandler for EditorHandle {
             return;
         };
         if window_id != core.platform.window.id() {
+            return;
+        }
+
+        if handle_player_input_capture(&mut self.runner, core, &event) {
             return;
         }
 

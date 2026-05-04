@@ -330,25 +330,7 @@ fn axis(keys: &KeysPressed, negative: u32, positive: u32) -> f32 {
 }
 
 fn key_discriminant(code: KeyCode) -> Option<u32> {
-    match code {
-        KeyCode::Left => Some(0),
-        KeyCode::Right => Some(1),
-        KeyCode::Up => Some(2),
-        KeyCode::Down => Some(3),
-        KeyCode::W => Some(4),
-        KeyCode::A => Some(5),
-        KeyCode::S => Some(6),
-        KeyCode::D => Some(7),
-        KeyCode::Space => Some(8),
-        KeyCode::Return => Some(9),
-        KeyCode::LeftShift => Some(10),
-        KeyCode::R => Some(11),
-        KeyCode::Digit1 => Some(12),
-        KeyCode::Digit2 => Some(13),
-        KeyCode::Digit3 => Some(14),
-        KeyCode::Digit4 => Some(15),
-        _ => None,
-    }
+    forge_ecs::systems::player_input::key_code_discriminant(code)
 }
 
 fn render(state: &mut CtfState) {

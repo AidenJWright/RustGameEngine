@@ -1,0 +1,122 @@
+{
+  "version": 1,
+  "entities": [
+    {
+      "id": 1,
+      "parent": null,
+      "tag": "scene_root",
+      "transform": {
+        "position": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "rotation": 0.0,
+        "scale": {
+          "x": 1.0,
+          "y": 1.0,
+          "z": 1.0
+        }
+      },
+      "color": null,
+      "shape": null,
+      "velocity": null,
+      "health": null,
+      "sinusoid": null,
+      "camera": null,
+      "player_input": null,
+      "spawn_points": null
+    },
+    {
+      "id": 4294967297,
+      "parent": 1,
+      "tag": null,
+      "transform": {
+        "position": {
+          "x": 400.0,
+          "y": 400.0,
+          "z": 0.0
+        },
+        "rotation": 0.0,
+        "scale": {
+          "x": 1.0,
+          "y": 1.0,
+          "z": 1.0
+        }
+      },
+      "color": {
+        "r": 1.0,
+        "g": 0.4,
+        "b": 0.1,
+        "a": 1.0
+      },
+      "shape": {
+        "Circle": {
+          "radius": 50.0
+        }
+      },
+      "velocity": null,
+      "health": null,
+      "sinusoid": null,
+      "camera": null,
+      "player_input": {
+        "horizontal": {
+          "negative": "W",
+          "positive": "A"
+        },
+        "vertical": {
+          "negative": "S",
+          "positive": "D"
+        },
+        "speed": 220.0
+      },
+      "spawn_points": null
+    },
+    {
+      "id": 8589934593,
+      "parent": 1,
+      "tag": null,
+      "transform": {
+        "position": {
+          "x": 125.0,
+          "y": 265.0,
+          "z": 0.0
+        },
+        "rotation": 0.0,
+        "scale": {
+          "x": 1.0,
+          "y": 1.0,
+          "z": 1.0
+        }
+      },
+      "color": {
+        "r": 0.2,
+        "g": 0.6,
+        "b": 1.0,
+        "a": 1.0
+      },
+      "shape": {
+        "Rect": {
+          "width": 100.0,
+          "height": 100.0
+        }
+      },
+      "velocity": null,
+      "health": null,
+      "sinusoid": null,
+      "camera": null,
+      "player_input": {
+        "horizontal": {
+          "negative": "ArrowLeft",
+          "positive": "ArrowRight"
+        },
+        "vertical": {
+          "negative": "ArrowUp",
+          "positive": "ArrowDown"
+        },
+        "speed": 220.0
+      },
+      "spawn_points": null
+    }
+  ]
+}

@@ -23,12 +23,17 @@ pub enum ConfigKey {
     S,
     D,
     R,
+    Digit1,
+    Digit2,
+    Digit3,
+    Digit4,
+    LeftShift,
     Space,
     Return,
 }
 
 impl ConfigKey {
-    /// All variants, in display order — used to build editor combo boxes.
+    /// All bindable variants, in display order.
     pub const ALL: &'static [Self] = &[
         Self::None,
         Self::ArrowLeft,
@@ -40,11 +45,16 @@ impl ConfigKey {
         Self::S,
         Self::D,
         Self::R,
+        Self::Digit1,
+        Self::Digit2,
+        Self::Digit3,
+        Self::Digit4,
+        Self::LeftShift,
         Self::Space,
         Self::Return,
     ];
 
-    /// Human-readable label shown in the editor dropdown.
+    /// Human-readable label shown in the editor.
     pub fn label(self) -> &'static str {
         match self {
             Self::None => "None",
@@ -57,12 +67,17 @@ impl ConfigKey {
             Self::S => "S",
             Self::D => "D",
             Self::R => "R",
+            Self::Digit1 => "1",
+            Self::Digit2 => "2",
+            Self::Digit3 => "3",
+            Self::Digit4 => "4",
+            Self::LeftShift => "Left Shift",
             Self::Space => "Space",
             Self::Return => "Return",
         }
     }
 
-    /// Index into `ConfigKey::ALL` — used by the editor combo selection.
+    /// Index into `ConfigKey::ALL`.
     pub fn index(self) -> usize {
         Self::ALL.iter().position(|k| *k == self).unwrap_or(0)
     }

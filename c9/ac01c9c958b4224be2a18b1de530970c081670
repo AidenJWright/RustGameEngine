@@ -1,0 +1,34 @@
+src/app/editor_runner.rs
+  ca7b049772185e2e 14,19-22,25,27,29,31,390-393,411-414,470-473,498-501,514-515,518-531,534-547,553-556,845-866,870-874,878-894,898-902,955-963,976-1074,1127
+src/systems/player_input.rs
+  ca7b049772185e2e 11,17,21-22,35-39,45-72,76-77,96-97,104-107,128-210
+docs/google-cloud-relay-deployment.md
+  h_e11066131581f1 210
+demo/editor.rs
+  ca7b049772185e2e 24,162,171-176
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "c9ac01c9c958b4224be2a18b1de530970c081670",
+  "prompts": {
+    "ca7b049772185e2e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019df4e7-6c64-7613-b535-2dfee4a13feb",
+        "model": "gpt-5.5"
+      },
+      "human_author": "RM",
+      "messages": [],
+      "total_additions": 410,
+      "total_deletions": 146,
+      "accepted_lines": 372,
+      "overriden_lines": 3
+    }
+  },
+  "humans": {
+    "h_e11066131581f1": {
+      "author": "RM"
+    }
+  }
+}
